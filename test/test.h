@@ -1,10 +1,12 @@
 namespace A {
-/*! test 1 */
 void test();
 }
-void A::test() {}
+void A::test() {
+/*! test 1 */
+}
 
 namespace B {
+void test() {
 /*! test 2 */
-void test() {}
+}
 }

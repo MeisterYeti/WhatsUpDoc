@@ -32,4 +32,7 @@ build
 *.exe
 *.out
 *.app
+
+# IDE files
 .clang_complete
+CMakeSettings.json

@@ -30,9 +30,20 @@ add_executable(${PROJECT_NAME}
 # add ./cmake to module search path
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
-# find EScript library
-find_package(LibClang)
+find_package(LibClang REQUIRED)
 if(LIBCLANG_FOUND)
 	target_include_directories(${PROJECT_NAME} PUBLIC ${LIBCLANG_INCLUDE_DIRS})
 	target_link_libraries(${PROJECT_NAME} LINK_PUBLIC ${LIBCLANG_LIBRARIES})
 endif()
+
+#find_package(LLVM REQUIRED)
+#if(LLVM_FOUND)
+#	target_include_directories(${PROJECT_NAME} PUBLIC ${LLVM_INCLUDE_DIRS})
+#	target_link_libraries(${PROJECT_NAME} LINK_PUBLIC ${LLVM_LIBS_CORE} ${LLVM_LDFLAGS})
+#endif()
+#
+#find_package(Clang REQUIRED)
+#if(CLANG_FOUND)
+#	target_include_directories(${PROJECT_NAME} PUBLIC ${CLANG_INCLUDE_DIRS})
+#	target_link_libraries(${PROJECT_NAME} LINK_PUBLIC ${CLANG_LIBS})
+#endif()
