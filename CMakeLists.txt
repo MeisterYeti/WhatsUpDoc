@@ -20,6 +20,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # add C++ source files to the project
 add_executable(${PROJECT_NAME}
 	src/WhatsUpDoc.cpp
+	src/Helper.cpp
 )
 
 # make sure that the built .dll or .so file is placed into the 'build' or 'bin' directory

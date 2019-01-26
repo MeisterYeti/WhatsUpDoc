@@ -1,17 +1,9 @@
 #include <iostream>
 #include <clang-c/Documentation.h>
+#include <vector>
 
-void printDiagnostics(CXTranslationUnit translationUnit) {
-  int nbDiag = clang_getNumDiagnostics(translationUnit);
-  printf("There is %i diagnostics\n",nbDiag);
-  
-  for(unsigned int currentDiag = 0; currentDiag < nbDiag; ++currentDiag) {
-    CXDiagnostic diagnotic = clang_getDiagnostic(translationUnit, currentDiag); 
-    CXString errorString = clang_formatDiagnostic(diagnotic,clang_defaultDiagnosticDisplayOptions());
-    fprintf(stderr, "%s\n", clang_getCString(errorString));
-    clang_disposeString(errorString);
-  }
-}
+#include "Helper.h"
+using namespace WhatsUpDoc;
 
 void printTokenInfo(CXTranslationUnit translationUnit,CXToken currentToken) {
   CXString tokenString = clang_getTokenSpelling(translationUnit, currentToken);
@@ -38,7 +30,33 @@ void printTokenInfo(CXTranslationUnit translationUnit,CXToken currentToken) {
   }  
 }
 
-void printCursorTokens(CXTranslationUnit translationUnit,CXCursor currentCursor) {
+
+std::vector<std::string> extractComments(CXTranslationUnit translationUnit, CXCursor currentCursor) {  
+  std::vector<std::string> comments;
+  
+  CXSourceRange srcRange = clang_getCursorExtent(currentCursor);  
+  CXToken *tokens;
+  uint32_t nbTokens;
+  clang_tokenize(translationUnit, srcRange, &tokens, &nbTokens);
+  
+  for (uint32_t i = 0; i < nbTokens; ++i) {
+    CXTokenKind kind = clang_getTokenKind(tokens[i]);
+    if(kind == CXToken_Comment) {
+      CXString tokenString = clang_getTokenSpelling(translationUnit, tokens[i]);            
+      CXSourceLocation location = clang_getTokenLocation(translationUnit, tokens[i]);
+      CXString filename;
+      unsigned int line, column;      
+      clang_getPresumedLocation(location, &filename, &line, &column);
+
+      comments.emplace_back(toString(tokenString) + " -> " + std::to_string(line));
+    }
+  }
+  
+  clang_disposeTokens(translationUnit,tokens,nbTokens);
+  return comments;
+}
+
+void printCursorTokens(CXTranslationUnit translationUnit, CXCursor currentCursor) {
   CXToken *tokens;
   unsigned int nbTokens;
   CXSourceRange srcRange;
@@ -58,20 +76,22 @@ void printCursorTokens(CXTranslationUnit translationUnit,CXCursor currentCursor)
 CXChildVisitResult initVisitor(CXCursor cursor, CXCursor parent, CXClientData client_data) {
   CXCursorKind kind = clang_getCursorKind(cursor);
   CXString name = clang_getCursorSpelling(cursor);
-  
+    
   CXString com = clang_Cursor_getRawCommentText(cursor);
-  auto cstr = clang_getCString(com);
-  if(cstr && cstr[0] != '\0')
-    printf("    comment '%s'\n",cstr);
+  if(clang_getCString(com))
+    std::cout << "    comment " << com << std::endl;
     
   if(kind == CXCursor_CallExpr) {    
-    printf("  call '%s' -> %i\n",clang_getCString(name),kind);
+    std::cout << "  call " << name << " -> " << getCursorKindName(kind) << std::endl;
+    CXCursor ref = clang_getCursorReferenced(cursor);
+    std::cout << "  ref-usr " << clang_getCursorUSR(ref) << std::endl;
+    
     int argc = clang_Cursor_getNumArguments(cursor);
     for(int i=0; i<argc; ++i) {
       CXCursor arg = clang_Cursor_getArgument(cursor, i);
       CXString argname = clang_getCursorSpelling(arg);
       CXCursorKind akind = clang_getCursorKind(arg);
-      printf("    arg '%s' -> %i\n",clang_getCString(argname), akind);
+      std::cout << "    arg " << argname << " -> " << akind << std::endl;
       
       CXSourceRange range = clang_getCursorExtent(arg);
       CXTranslationUnit tu = clang_Cursor_getTranslationUnit(arg);
@@ -80,17 +100,16 @@ CXChildVisitResult initVisitor(CXCursor cursor, CXCursor parent, CXClientData cl
       clang_tokenize(tu, range, &tokens, &nTokens);
       for (unsigned int i = 0; i < nTokens; i++) {
           CXString spelling = clang_getTokenSpelling(tu, tokens[i]);
-          printf("      token = %s\n", clang_getCString(spelling));
-          clang_disposeString(spelling);
+          std::cout << "      token " << spelling << std::endl;
       }
       clang_disposeTokens(tu, tokens, nTokens);
     }
   } else if(kind == CXCursor_FunctionDecl) {
+    std::cout << "  decl " << name << " -> " << getCursorKindName(kind) << std::endl;
     return CXChildVisit_Continue;
   }
   //printCursorTokens(clang_Cursor_getTranslationUnit(cursor),cursor);
-  //printf("  fncursor '%s' -> %i\n",clang_getCString(name),kind);
-  
+  //printf("  fncursor '%s' -> %i\n",clang_getCString(name),kind);  
     
   return CXChildVisit_Recurse;
 }
@@ -100,21 +119,21 @@ CXChildVisitResult functionDeclVisitor(CXCursor cursor, CXCursor parent, CXClien
   CXType type = clang_getCursorType(cursor);
     
   CXString com = clang_Cursor_getRawCommentText(cursor);
-  auto cstr = clang_getCString(com);
-  if(cstr && cstr[0] != '\0')
-    printf("  comment '%s'\n",cstr);
-    
-  CXString cname = clang_getCursorSpelling(cursor);
-  std::string name = clang_getCString(cname);
+  if(clang_getCString(com))
+    std::cout << "comment " << com << std::endl;
+  
+  CXString name = clang_getCursorSpelling(cursor);
   if (kind == CXCursor_ParmDecl) {
-    printf("\tparameter: '%s' of type '%i'\n",name.c_str(),type.kind);
-    int *nbParams = (int *)client_data;
-    (*nbParams)++;
+    std::cout << "  parameter: " << name << " -> " << type.kind << std::endl;
+  } else {
+    std::cout << "  name " << name << " -> " << getCursorKindName(kind) << std::endl;
   }
-  printf("  name '%s' -> %i\n",name.c_str(),kind);
 
   clang_visitChildren(cursor, *initVisitor, nullptr);
   //printCursorTokens(clang_Cursor_getTranslationUnit(cursor),cursor);
+  auto comments = extractComments(clang_Cursor_getTranslationUnit(cursor), cursor);
+  for(auto c : comments)
+    std::cout << "  comment " << c << std::endl;
 
   return CXChildVisit_Continue;
 }
@@ -122,36 +141,41 @@ CXChildVisitResult functionDeclVisitor(CXCursor cursor, CXCursor parent, CXClien
 CXChildVisitResult cursorVisitor(CXCursor cursor, CXCursor parent, CXClientData client_data) {
   
   CXCursorKind kind = clang_getCursorKind(cursor);
-  CXString cname = clang_getCursorSpelling(cursor);
-  std::string name = clang_getCString(cname);
+  std::string name = toString(clang_getCursorSpelling(cursor));
   
   if(kind == CXCursor_MacroExpansion) {  
-    if(name.compare(0, 6, "ES_FUN") == 0 || name.compare(0, 7, "ES_MFUN") == 0) {
-      printf("macro '%s' -> %i\n",name.c_str(),kind);
-    }
-  } else if (kind == CXCursor_FunctionDecl) {
-    if(name == "init") {
-      
-      CXString com = clang_Cursor_getRawCommentText(cursor);
-      auto cstr = clang_getCString(com);
-      if(cstr && cstr[0] != '\0')
-        printf("comment '%s'\n",cstr);
-      printf("method '%s'\n",name.c_str());
+    //if(name.compare(0, 6, "ES_FUN") == 0 || name.compare(0, 7, "ES_MFUN") == 0) {
+      std::cout << "macro " << name << " -> " << getCursorKindName(kind) << std::endl;
+      printCursorTokens(clang_Cursor_getTranslationUnit(cursor),cursor);
               
-      CXSourceLocation location = clang_getCursorLocation(cursor);      
+      CXSourceLocation location = clang_getCursorLocation(cursor);
       CXString filename;
       unsigned int line, column;      
-      clang_getPresumedLocation(location, &filename, &line, &column);      
-      printf("source location : %s, (%i,%i)\n",clang_getCString(filename),line,column);
+      clang_getPresumedLocation(location, &filename, &line, &column);
+      std::cout << "  source location " << filename << ", (" << line << "," << column << ")" << std::endl;
+    //}
+  } else if (kind == CXCursor_FunctionDecl) {
+    bool isDef = clang_isCursorDefinition(cursor);
+    if(name == "init" && isDef) {
+      std::cout << "method " << name << " -> " << getCursorKindName(kind) << std::endl;
+      std::cout << "  usr " << clang_getCursorUSR(cursor) << std::endl;
       
-
+      CXString com = clang_Cursor_getRawCommentText(cursor);
+      if(clang_getCString(com))
+        std::cout << "  comment " << com << std::endl;
+              
+      CXSourceLocation location = clang_getCursorLocation(cursor);
+      CXString filename;
+      unsigned int line, column;      
+      clang_getPresumedLocation(location, &filename, &line, &column);
+      std::cout << "  source location " << filename << ", (" << line << "," << column << ")" << std::endl;
+      
       // visit method childs
-      int nbParams = 0;
-      clang_visitChildren(cursor, *functionDeclVisitor,&nbParams);
+      clang_visitChildren(cursor, *functionDeclVisitor, 0);
     }
     return CXChildVisit_Continue;
   }
-  //printf("cursor '%s' -> %i\n",name.c_str(),kind);
+  //std::cout << "cursor " << name << " -> " << getCursorKindName(kind) << std::endl;
   return CXChildVisit_Recurse;
 }
 
@@ -159,7 +183,7 @@ int main (int argc, const char * argv[]) {
   CXIndex index = clang_createIndex(1, 1);
   
   if(index == 0) {
-    fprintf(stderr, "error creating index\n");
+    std::cerr << "error creating index\n";
     return 1;
   }
  
@@ -174,19 +198,16 @@ int main (int argc, const char * argv[]) {
   //CXTranslationUnit translationUnit = clang_parseTranslationUnit(index, 0, argv, argc, 0, 0, CXTranslationUnit_None);
   
   if(translationUnit == 0) {
-    fprintf(stderr, "error creating translationUnit\n");
+    std::cerr << "error creating translationUnit\n";
     return 1;
   }
-  
-  printDiagnostics(translationUnit);
-
   
   CXCursor rootCursor = clang_getTranslationUnitCursor(translationUnit);
   
   //printCursorTokens(translationUnit,rootCursor);
   
-  unsigned int res = clang_visitChildren(rootCursor, *cursorVisitor,0);
-  
+  clang_visitChildren(rootCursor, *cursorVisitor,0);
+    
   clang_disposeTranslationUnit(translationUnit);
   clang_disposeIndex(index);
   return 0;
