@@ -19,8 +19,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # add C++ source files to the project
 add_executable(${PROJECT_NAME}
-	src/WhatsUpDoc.cpp
 	src/Helper.cpp
+	src/Parser.cpp
+	src/WhatsUpDoc.cpp
 )
 
 # make sure that the built .dll or .so file is placed into the 'build' or 'bin' directory
@@ -30,6 +31,13 @@ add_executable(${PROJECT_NAME}
 
 # add ./cmake to module search path
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
+
+# find EScript library
+find_package(EScript)
+if(ESCRIPT_FOUND)
+	target_include_directories(${PROJECT_NAME} PUBLIC ${ESCRIPT_INCLUDE_DIRS})
+	target_link_libraries(${PROJECT_NAME} LINK_PUBLIC ${ESCRIPT_LIBRARIES})
+endif()
 
 find_package(LibClang REQUIRED)
 if(LIBCLANG_FOUND)

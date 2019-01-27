@@ -1,5 +1,8 @@
 #include "Helper.h"
 
+#include <iostream>
+#include <sstream>
+
 namespace WhatsUpDoc {
 
 std::ostream& operator<<(std::ostream& stream, const CXString& str) {
@@ -10,6 +13,22 @@ std::ostream& operator<<(std::ostream& stream, const CXString& str) {
   return stream;
 }
 
+// -------------------------------------------------
+
+std::ostream& operator<<(std::ostream& stream, const EScript::StringId& str) {
+  stream << str.toString();
+  return stream;
+}
+
+// -------------------------------------------------
+
+std::ostream& operator<<(std::ostream& stream, const Location& loc) {
+  stream << loc.file << ":" << loc.line << ":" << loc.col;
+  return stream;
+}
+
+// -------------------------------------------------
+
 std::string toString(const CXString& str) {
   auto cstr = clang_getCString(str);
   std::string s;
@@ -18,6 +37,8 @@ std::string toString(const CXString& str) {
   clang_disposeString(str);
   return s;
 }
+
+// -------------------------------------------------
 
 bool isLiteral(CXCursorKind kind) {  
   switch(kind) {
@@ -31,6 +52,16 @@ bool isLiteral(CXCursorKind kind) {
       return false;
   }
 }
+
+// -------------------------------------------------
+
+bool hasType(CXCursor cursor, const std::string& name) {
+  auto type = clang_getCursorType(cursor);
+  auto spelling = toString(clang_getTypeSpelling(type));
+  return spelling.find(name) != std::string::npos;
+}
+
+// -------------------------------------------------
 
 std::string getCursorKindName(CXCursorKind kind) {
   switch(kind) {
@@ -270,6 +301,8 @@ std::string getCursorKindName(CXCursorKind kind) {
   return std::to_string(kind);
 }
 
+// -------------------------------------------------
+
 std::string getTokenKindName(CXTokenKind kind) {    
   switch (kind) {
     case CXToken_Comment: return "Comment";
@@ -280,4 +313,104 @@ std::string getTokenKindName(CXTokenKind kind) {
   }
   return std::to_string(kind);
 }
+
+// -------------------------------------------------
+
+CXChildVisitResult getCursorRefVisitor(CXCursor cursor, CXCursor parent, CXClientData client_data) {
+  CXCursorKind kind = clang_getCursorKind(cursor);
+  auto name = toString(clang_getCursorSpelling(cursor));
+  if(kind == CXCursor_DeclRefExpr) {
+    //std::cout << "      c " << name << " -> " << getCursorKindName(kind) << std::endl;
+    *reinterpret_cast<CXCursor*>(client_data) = cursor;
+    return CXChildVisit_Break;
+  }    
+  return CXChildVisit_Recurse;
+}
+
+CXCursor getCursorRef(CXCursor cursor) {
+  CXCursor refCursor = clang_getNullCursor();
+  clang_visitChildren(cursor, *getCursorRefVisitor, &refCursor);
+  if(!clang_Cursor_isNull(refCursor)) {
+    return clang_getCursorReferenced(refCursor);
+  }
+  return clang_getNullCursor();
+}
+
+// -------------------------------------------------
+
+Location getCursorLocation(CXCursor cursor) {
+  Location loc;
+  CXString filename;
+  CXSourceLocation location = clang_getCursorLocation(cursor);
+  clang_getPresumedLocation(location, &filename, &loc.line, &loc.col);
+  loc.file = toString(filename);
+  return loc;
+}
+
+// -------------------------------------------------
+
+Location getTokenLocation(CXTranslationUnit tu, CXToken token) {
+  Location loc;
+  CXString filename;
+  CXSourceLocation location = clang_getTokenLocation(tu, token);
+  clang_getPresumedLocation(location, &filename, &loc.line, &loc.col);
+  loc.file = toString(filename);
+  return loc;
+}
+
+// -------------------------------------------------
+
+int extractIntLiteral(CXCursor cursor) {
+  CXSourceRange range = clang_getCursorExtent(cursor);
+  CXTranslationUnit tu = clang_Cursor_getTranslationUnit(cursor);
+  CXToken *tokens = 0;
+  unsigned int nTokens = 0;
+  clang_tokenize(tu, range, &tokens, &nTokens);
+  int value = 0;
+  for (unsigned int i = 0; i < nTokens; i++) {
+    std::string spelling = toString(clang_getTokenSpelling(tu, tokens[i]));
+    if(clang_getTokenKind(tokens[i]) == CXToken_Literal && spelling.find('\"') == std::string::npos) {
+      std::stringstream ss(spelling);
+      ss >> value;
+      break;
+    }
+  }
+  clang_disposeTokens(tu, tokens, nTokens);
+  return value;
+}
+
+// -------------------------------------------------
+
+/*CXChildVisitResult extractStringLiteralVisitor(CXCursor cursor, CXCursor parent, CXClientData client_data) {
+  CXCursorKind kind = clang_getCursorKind(cursor);
+  if(kind == CXCursor_StringLiteral) {
+    auto name = toString(clang_getCursorSpelling(cursor));
+    reinterpret_cast<std::string*>(client_data)->swap(name);
+    return CXChildVisit_Break;
+  }
+  return CXChildVisit_Recurse;
+}*/
+
+std::string extractStringLiteral(CXCursor cursor) {
+  CXSourceRange range = clang_getCursorExtent(cursor);
+  CXTranslationUnit tu = clang_Cursor_getTranslationUnit(cursor);
+  CXToken *tokens = 0;
+  unsigned int nTokens = 0;
+  clang_tokenize(tu, range, &tokens, &nTokens);
+  std::string value;
+  for (unsigned int i = 0; i < nTokens; i++) {
+    std::string spelling = toString(clang_getTokenSpelling(tu, tokens[i]));
+    if(clang_getTokenKind(tokens[i]) == CXToken_Literal && spelling.find('\"') != std::string::npos) {
+      value = spelling.substr(1, spelling.size()-2);
+      break;
+    }
+  }
+  clang_disposeTokens(tu, tokens, nTokens);
+  return value;
+  /*std::string literal;
+  clang_visitChildren(cursor, *extractStringLiteralVisitor, &literal);
+  return literal;*/
+}
+
+// -------------------------------------------------
 } /* WhatsUpDoc */

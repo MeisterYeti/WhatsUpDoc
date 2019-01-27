@@ -2,6 +2,7 @@
 #include <clang-c/Documentation.h>
 #include <vector>
 
+#include "Parser.h"
 #include "Helper.h"
 using namespace WhatsUpDoc;
 
@@ -61,7 +62,7 @@ CXChildVisitResult testVisitor(CXCursor cursor, CXCursor parent, CXClientData cl
   int depth = *reinterpret_cast<int*>(client_data);
   for(int i=0; i<depth; ++i)
     std::cout << "  ";
-  std::cout << "      c " << name << " -> " << getCursorKindName(kind) << std::endl;
+  std::cout << "c " << name << " -> " << getCursorKindName(kind) << std::endl;
   depth += 1;
   clang_visitChildren(cursor, *testVisitor, &depth);
     
@@ -93,16 +94,30 @@ CXChildVisitResult initVisitor(CXCursor cursor, CXCursor parent, CXClientData cl
         CXCursor refCursor = clang_getNullCursor();
         clang_visitChildren(arg, *findDeclRef, &refCursor);
         if(!clang_Cursor_isNull(refCursor)) {
-          std::cout << "      ref " << clang_getCursorSpelling(refCursor) << " -> " << getCursorKindName(clang_getCursorKind(refCursor)) << std::endl;
+          CXCursor ref = clang_getCursorReferenced(refCursor);
+          CXType type = clang_getCursorType(ref);
+          if(type.kind == CXType_Pointer)
+            type = clang_getPointeeType(type);
+          CXCursor decl = clang_getTypeDeclaration(type);
+          std::cout << "      ref " << clang_getCursorSpelling(ref) << " -> " << getCursorKindName(clang_getCursorKind(ref)) << std::endl;
+          std::cout << "      type " << clang_getTypeSpelling(type) << " -> " << clang_getTypeKindSpelling(type.kind) << std::endl;
+          std::cout << "      decl " << clang_getCursorSpelling(decl) << " -> " << getCursorKindName(clang_getCursorKind(decl)) << std::endl;
+          std::cout << "      usr " << clang_getCursorUSR(ref) << std::endl;
+          if(clang_getCursorKind(ref) == CXCursor_VarDecl) {
+            //printTokens(ref);
+          }
         } else {
           printTokens(arg);
         }
       }
-      
-      
     }
   } else if(kind == CXCursor_FunctionDecl) {
-    std::cout << "  decl " << name << " -> " << getCursorKindName(kind) << std::endl;
+    return CXChildVisit_Continue;
+  } else if(kind == CXCursor_ReturnStmt) {
+    std::cout << "  return " << name << " -> " << getCursorKindName(kind) << std::endl;
+    printTokens(cursor);
+    int depth = 2;
+    clang_visitChildren(cursor, *testVisitor, &depth);
     return CXChildVisit_Continue;
   }
   //printCursorTokens(clang_Cursor_getTranslationUnit(cursor),cursor);
@@ -117,16 +132,17 @@ CXChildVisitResult functionDeclVisitor(CXCursor cursor, CXCursor parent, CXClien
   
   CXString name = clang_getCursorSpelling(cursor);
   if (kind == CXCursor_ParmDecl) {
-    std::cout << "  parameter: " << name << " -> " << type.kind << std::endl;
+    std::cout << "  parameter: " << name << " -> " << clang_getTypeKindSpelling(type.kind) << std::endl;
+    std::cout << "    usr " << clang_getCursorUSR(cursor) << std::endl;
   } else {
-    std::cout << "  name " << name << " -> " << getCursorKindName(kind) << std::endl;
+    //std::cout << "  cursor " << name << " -> " << getCursorKindName(kind) << std::endl;
   }
-
-  clang_visitChildren(cursor, *initVisitor, nullptr);
-  //printCursorTokens(clang_Cursor_getTranslationUnit(cursor),cursor);
   auto comments = extractComments(clang_Cursor_getTranslationUnit(cursor), cursor);
   for(auto c : comments)
     std::cout << "  comment " << c << std::endl;
+    
+  clang_visitChildren(cursor, *initVisitor, nullptr);
+  //printCursorTokens(clang_Cursor_getTranslationUnit(cursor),cursor);
 
   return CXChildVisit_Continue;
 }
@@ -146,19 +162,15 @@ CXChildVisitResult cursorVisitor(CXCursor cursor, CXCursor parent, CXClientData 
       clang_getPresumedLocation(location, &filename, &line, &column);
       std::cout << "macro " << name << " -> " << getCursorKindName(kind) << " @ " << line << std::endl;
     }
-  } else if (kind == CXCursor_FunctionDecl) {
+  } else if (kind == CXCursor_FunctionDecl ||kind == CXCursor_CXXMethod) {
     bool isDef = clang_isCursorDefinition(cursor);
-    if(name == "init" && isDef) {
+    if((name == "init" || name == "getClassName") && isDef) {
       std::cout << "method " << name << " -> " << getCursorKindName(kind) << std::endl;
       std::cout << "  usr " << clang_getCursorUSR(cursor) << std::endl;
-      
-      CXString com = clang_Cursor_getRawCommentText(cursor);
-      if(clang_getCString(com))
-        std::cout << "  comment " << com << std::endl;
               
       CXSourceLocation location = clang_getCursorLocation(cursor);
       CXString filename;
-      unsigned int line, column;      
+      unsigned int line, column;
       clang_getPresumedLocation(location, &filename, &line, &column);
       std::cout << "  source location " << filename << ", (" << line << "," << column << ")" << std::endl;
       
@@ -167,40 +179,17 @@ CXChildVisitResult cursorVisitor(CXCursor cursor, CXCursor parent, CXClientData 
     }
     return CXChildVisit_Continue;
   }
-  //std::cout << "cursor " << name << " -> " << getCursorKindName(kind) << std::endl;
   return CXChildVisit_Recurse;
 }
 
-int main (int argc, const char * argv[]) {
-  CXIndex index = clang_createIndex(0, 0);
+int main(int argc, const char * argv[]) {
+  Parser parser;
   
-  if(index == 0) {
-    std::cerr << "error creating index\n";
-    return 1;
-  }
- 
-  const char* args[] = { "-x", "c++", "-Wdocumentation", "-fparse-all-comments", "-Itest", "-Itest/EScript" }; 
-  CXTranslationUnit translationUnit = clang_parseTranslationUnit(
-   index,
-   "test/E_Util/ELibUtil.cpp",
-   //"test/test.h",
-   args, 6,
-   nullptr, 0,
-   CXTranslationUnit_DetailedPreprocessingRecord);
-  //CXTranslationUnit translationUnit = clang_parseTranslationUnit(index, 0, argv, argc, 0, 0, CXTranslationUnit_None);
+  parser.addInclude("test");
+  parser.addInclude("test/EScript");
+  parser.addInclude("test/E_Util");
   
-  if(translationUnit == 0) {
-    std::cerr << "error creating translationUnit\n";
-    return 1;
-  }
-  
-  CXCursor rootCursor = clang_getTranslationUnitCursor(translationUnit);
-  
-  //printCursorTokens(translationUnit,rootCursor);
-  
-  clang_visitChildren(rootCursor, *cursorVisitor,0);
-    
-  clang_disposeTranslationUnit(translationUnit);
-  clang_disposeIndex(index);
+  parser.parseFile("test/E_Util/Graphics/E_Bitmap.cpp");
+  parser.parseFile("test/E_Util/ELibUtil.cpp");
   return 0;
 }
