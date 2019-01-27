@@ -19,6 +19,19 @@ std::string toString(const CXString& str) {
   return s;
 }
 
+bool isLiteral(CXCursorKind kind) {  
+  switch(kind) {
+    case CXCursor_IntegerLiteral:
+    case CXCursor_FloatingLiteral:
+    case CXCursor_ImaginaryLiteral:
+    case CXCursor_StringLiteral:
+    case CXCursor_CharacterLiteral:
+      return true;
+    default:
+      return false;
+  }
+}
+
 std::string getCursorKindName(CXCursorKind kind) {
   switch(kind) {
     case CXCursor_UnexposedDecl: return "UnexposedDecl"; // 1
@@ -257,4 +270,14 @@ std::string getCursorKindName(CXCursorKind kind) {
   return std::to_string(kind);
 }
 
+std::string getTokenKindName(CXTokenKind kind) {    
+  switch (kind) {
+    case CXToken_Comment: return "Comment";
+    case CXToken_Identifier: return "Identifier";
+    case CXToken_Keyword: return "Keyword";
+    case CXToken_Literal: return "Literal";
+    case CXToken_Punctuation: return "Punctuation";
+  }
+  return std::to_string(kind);
+}
 } /* WhatsUpDoc */

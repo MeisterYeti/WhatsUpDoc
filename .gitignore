@@ -1,4 +1,7 @@
 build
+test/E_Util
+test/Util
+test/EScript
 
 # Prerequisites
 *.d
