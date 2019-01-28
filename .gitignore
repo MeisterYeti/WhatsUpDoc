@@ -1,7 +1,6 @@
 build
-test/E_Util
-test/Util
-test/EScript
+test/API
+test/json
 
 # Prerequisites
 *.d

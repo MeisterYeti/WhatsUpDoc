@@ -4,50 +4,67 @@
 #include <clang-c/Index.h>
 
 #include <EScript/Utils/StringId.h>
+#include <EScript/Utils/StringUtils.h>
+#include <EScript/Utils/IO/IO.h>
 
 #include <iostream>
+#include <sstream>
 #include <unordered_map>
-#include <set>
+#include <deque>
 
 namespace WhatsUpDoc {
 using namespace EScript;
 
 struct FunctionAttr {
-  uint32_t line;
+  Location location;
   int minParams = 0;
   int maxParams = 0;
   std::string name;
   std::string comment;
-  StringId lib;
 };
 
 struct ConstAttr {
-  uint32_t line;
+  Location location;
   std::string name;
   std::string comment;
-  StringId lib;
 };
 
 struct RefAttr {
-  uint32_t line;
+  Location location;
   std::string name;
-  StringId lib;
   StringId ref;
 };
 
-struct InitCall {
+/*struct InitCall {
   StringId call;
   StringId lib;
+};*/
+
+struct Comment {
+  Comment(int l, const std::string& s) : line(l), comment(s) {}
+  int line;
+  std::string comment;
+};
+
+struct Compound {
+  StringId id;
+  StringId refId;
+  StringId parentId;
+  std::string name;
+  Location location;
+  enum {UNKNOWN, NAMESPACE, TYPE} kind = UNKNOWN;
+  std::vector<FunctionAttr> functions;
+  std::vector<ConstAttr> consts;
+  std::vector<RefAttr> children;
+  bool isNull() const { return id.empty(); }
+  bool isRef() const { return !refId.empty(); }
 };
 
 struct InitFunction {
   StringId id;
   StringId paramId;
-  std::vector<FunctionAttr> functions;
-  std::vector<ConstAttr> consts;
-  std::vector<RefAttr> refs;
-  std::vector<InitCall> initCalls;
-  std::unordered_map<StringId, CXCursor> usedLibDecl;
+  Location location;
+  //std::vector<InitCall> initCalls;
 };
 
 struct ParsingContext {
@@ -55,14 +72,42 @@ struct ParsingContext {
   CXTranslationUnit tu;
   InitFunction* activeInit;
   std::unordered_map<StringId, InitFunction> inits;
+  std::unordered_map<StringId, std::string> names;
+  std::deque<Comment> comments;
+  std::unordered_map<StringId, Compound> compounds;
 };
 
 // -------------------------------------------------
 
-void assignComments(CXCursor cursor, ParsingContext* context) {
-  auto it = context->activeInit->functions.begin();
-  if(it == context->activeInit->functions.end())
+void mergeCompounds(Compound& c1, Compound& c2, ParsingContext* context) {
+  if(c1.id == c2.id)
     return;
+  //std::cout << "  merge " << c1.id << " & " << c2.id << std::endl;
+  std::move(c2.functions.begin(), c2.functions.end(), std::back_inserter(c1.functions));
+  c2.functions.clear();
+  
+  std::move(c2.consts.begin(), c2.consts.end(), std::back_inserter(c1.consts));
+  c2.consts.clear();
+  
+  for(auto& v : c2.children)
+    context->compounds[v.ref].parentId = c1.id;
+  std::move(c2.children.begin(), c2.children.end(), std::back_inserter(c1.children));
+  c2.children.clear();
+  
+  if(c1.name.empty())
+    c1.name = c2.name;
+  c2.name.clear();
+    
+  if(c1.parentId.empty())
+    c1.parentId = c2.parentId;
+  if(c1.location.file.empty())
+    c1.location = c2.location;
+  if(c1.kind == Compound::UNKNOWN)
+    c1.kind = c2.kind;
+  c2.refId = c1.id;
+}
+
+void extractComments(CXCursor cursor, ParsingContext* context) {
   CXSourceRange range = clang_getCursorExtent(cursor);
   CXTranslationUnit tu = clang_Cursor_getTranslationUnit(cursor);
   CXToken *tokens = 0;
@@ -75,12 +120,8 @@ void assignComments(CXCursor cursor, ParsingContext* context) {
       std::string comment = toString(clang_getTokenSpelling(tu, tokens[i]));
       std::string pre = comment.substr(0, 3);
       if(pre == "///" || pre == "//!" || pre == "/**" || pre == "/*!") {
-        // TODO: parse comments
-        if(location.line > it->line)
-          it++;
-        if(it == context->activeInit->functions.end())
-          break;
-        it->comment += comment + "\n";
+        comment = parseComment(comment);
+        context->comments.emplace_back(location.line, comment);
       }
     }    
   }
@@ -89,28 +130,66 @@ void assignComments(CXCursor cursor, ParsingContext* context) {
 
 // -------------------------------------------------
 
+Compound& resolveCompound(CXCursor cursor, ParsingContext* context) {
+  static Compound nullCompound;
+  if(clang_Cursor_isNull(cursor) || (!hasType(cursor, "EScript::Namespace") && !hasType(cursor, "EScript::Type")))
+    return nullCompound;
+  StringId id = toString(clang_getCursorUSR(cursor));
+  if(id == context->activeInit->paramId) {
+    id = context->activeInit->id;
+  } else {
+    CXCursor ref = getCursorRef(cursor);
+    if(!clang_Cursor_isNull(ref)) {
+      id = toString(clang_getCursorUSR(ref));
+    }
+  }
+  
+  auto& cmp = context->compounds[id];
+  if(cmp.isNull()) {
+    cmp.id = id;
+    cmp.location = getCursorLocation(cursor);
+    //std::cout << "  resolve " << cmp.id << std::endl;
+    if(hasType(cursor, "EScript::Namespace"))
+      cmp.kind = Compound::NAMESPACE; 
+    else if(hasType(cursor, "EScript::Type"))
+      cmp.kind = Compound::TYPE;
+  } else if(cmp.isRef()) {
+    cmp = context->compounds[cmp.refId];
+    //std::cout << "  resolve ref " << cmp.id << std::endl;
+  }
+  return cmp;
+}
+
+// -------------------------------------------------
+
 void handleDeclareFunction(CXCursor cursor, ParsingContext* context) {
   int argc = clang_Cursor_getNumArguments(cursor);
   auto location = getCursorLocation(cursor);
   FunctionAttr fun;
-  fun.line = location.line;
+  fun.location = location;
   if(argc != 3 && argc != 5) {
     std::cerr << "invalid function declaration at " << location << "." << std::endl;
     return;
   }
   CXCursor libRef = getCursorRef(clang_Cursor_getArgument(cursor, 0));
-  if(clang_Cursor_isNull(libRef) || (!hasType(libRef, "EScript::Namespace") && !hasType(libRef, "EScript::Type"))) {
+  auto& cmp = resolveCompound(libRef, context);
+  if(cmp.isNull()) {
     std::cerr << "invalid function declaration at " << location << "." << std::endl;
     return;
   }
-  fun.lib = toString(clang_getCursorUSR(libRef));
-  context->activeInit->usedLibDecl[fun.lib] = libRef;
   fun.name = extractStringLiteral(clang_Cursor_getArgument(cursor, 1));
   if(argc == 5) {
     fun.minParams = extractIntLiteral(clang_Cursor_getArgument(cursor, 2));
     fun.maxParams = extractIntLiteral(clang_Cursor_getArgument(cursor, 3));
   }
-  context->activeInit->functions.emplace_back(std::move(fun));
+  while(!context->comments.empty() && context->comments.front().line <= location.line) {
+    fun.comment += context->comments.front().comment + "\n";
+    context->comments.pop_front();
+  }
+  if(!fun.comment.empty())
+    fun.comment = fun.comment.substr(0, fun.comment.size()-1); // remove last \n
+  
+  cmp.functions.emplace_back(std::move(fun));
 }
 
 // -------------------------------------------------
@@ -120,30 +199,39 @@ void handleDeclareConstant(CXCursor cursor, ParsingContext* context) {
   auto location = getCursorLocation(cursor);
   if(argc != 3) return;
   CXCursor libRef = getCursorRef(clang_Cursor_getArgument(cursor, 0));
-  if(clang_Cursor_isNull(libRef) || (!hasType(libRef, "EScript::Namespace") && !hasType(libRef, "EScript::Type"))) {
+  auto& cmp = resolveCompound(libRef, context);
+  if(cmp.isNull()) {
     std::cerr << "invalid constant declaration at " << location << "." << std::endl;
     return;
   }
   std::string name;
-  StringId lib = toString(clang_getCursorUSR(libRef));
-  context->activeInit->usedLibDecl[lib] = libRef;
   CXCursor nameRef = getCursorRef(clang_Cursor_getArgument(cursor, 1));
   if(!clang_Cursor_isNull(nameRef)) {
-    // TODO: resolve name
-    name = toString(clang_getCursorSpelling(nameRef));
+    StringId refId = toString(clang_getCursorUSR(nameRef));
+    auto nameIt = context->names.find(refId);
+    if(nameIt != context->names.end())
+      name = nameIt->second;
   } else {
     name = extractStringLiteral(clang_Cursor_getArgument(cursor, 1));
+  }
+  if(name.empty()) {
+    std::cerr << "could not resolve constant name at " << location << "." << std::endl;
+    return;
   }
   
   CXCursor valueRef = getCursorRef(clang_Cursor_getArgument(cursor, 2));
   if(!clang_Cursor_isNull(valueRef) && (hasType(valueRef, "EScript::Namespace") || hasType(valueRef, "EScript::Type"))) {
-    RefAttr attr{location.line, name, lib, toString(clang_getCursorUSR(valueRef))};
-    context->activeInit->refs.emplace_back(std::move(attr));
+    auto& cmpRef = resolveCompound(valueRef, context);
+    cmpRef.name = name;
+    if(cmpRef.id == cmp.id)
+      return;
+    cmpRef.parentId = cmp.id;
+    RefAttr attr{location, name, cmpRef.id};
+    cmp.children.emplace_back(std::move(attr));
   } else {
-    ConstAttr attr{location.line, name, "", lib};
-    context->activeInit->consts.emplace_back(std::move(attr));
+    ConstAttr attr{location, name, ""};
+    cmp.consts.emplace_back(std::move(attr));
   }
-  
 }
 
 // -------------------------------------------------
@@ -153,15 +241,18 @@ void handleInitCall(CXCursor cursor, ParsingContext* context) {
   int argc = clang_Cursor_getNumArguments(cursor);
   if(argc < 1) return;
   CXCursor libRef = getCursorRef(clang_Cursor_getArgument(cursor, 0));
-  if(clang_Cursor_isNull(libRef) || !hasType(libRef, "EScript::Namespace")) {
+  auto& cmp = resolveCompound(libRef, context);
+  auto& initCmp = resolveCompound(cursorRef, context);
+  if(cmp.isNull() || initCmp.isNull()) {
     std::cerr << "invalid init call at " << getCursorLocation(cursor) << "." << std::endl;
     return;
   }
-  InitCall call;
-  call.call = toString(clang_getCursorUSR(cursorRef));
-  call.lib = toString(clang_getCursorUSR(libRef));
-  context->activeInit->initCalls.emplace_back(std::move(call));
-  context->activeInit->usedLibDecl[call.lib] = libRef;
+  //nitCall call;
+  //all.call = initCmp.id;
+  //all.lib = cmp.id;
+  mergeCompounds(cmp, initCmp, context);
+  
+  //context->activeInit->initCalls.emplace_back(std::move(call));
 }
 
 // -------------------------------------------------
@@ -204,46 +295,39 @@ CXChildVisitResult visitRoot(CXCursor cursor, CXCursor parent, CXClientData data
   
   if (kind == CXCursor_FunctionDecl || kind == CXCursor_CXXMethod) {
     bool isDef = clang_isCursorDefinition(cursor);
-    if(!isDef)
-      return CXChildVisit_Continue;
     std::string name = toString(clang_getCursorSpelling(cursor));
       
     if(name == "init") {
-      int argc = clang_Cursor_getNumArguments(cursor);
-      if(argc != 1 || !hasType(clang_Cursor_getArgument(cursor, 0), "EScript::Namespace"))
+      if(!isDef)
         return CXChildVisit_Continue;
+        
+      int argc = clang_Cursor_getNumArguments(cursor);
+      if(argc > 1 || (argc == 1 && !hasType(clang_Cursor_getArgument(cursor, 0), "EScript::Namespace"))) {
+        return CXChildVisit_Continue;
+      }
       StringId id = toString(clang_getCursorUSR(cursor));
       InitFunction& init = context->inits[id];
       init.id = id;
-      init.paramId = toString(clang_getCursorUSR(clang_Cursor_getArgument(cursor, 0)));
-      init.usedLibDecl[init.paramId] = clang_Cursor_getArgument(cursor, 0);
+      if(argc == 1)
+        init.paramId = toString(clang_getCursorUSR(clang_Cursor_getArgument(cursor, 0)));
       
       context->activeInit = &init;
+      resolveCompound(clang_Cursor_getArgument(cursor, 0), context);
       
-      std::cout << "init " << id << std::endl;
+      //std::cout << "init " << id << std::endl;
+      extractComments(cursor, context);
       clang_visitChildren(cursor, *visitInitFunction, context);
-      assignComments(cursor, context);
-      
-      for(auto& v : init.refs)
-        std::cout << "  type " << v.name << " (" << v.lib.getValue() << ", " << v.ref.getValue() << ") @ " << v.line << std::endl;
-      
-      for(auto& v : init.consts)
-        std::cout << "  const " << v.name << " (" << v.lib.getValue() << ") @ " << v.line << std::endl;
-    
-      for(auto& v : init.functions) {
-        if(!v.comment.empty())
-          std::cout << "  " << v.comment;
-        std::cout << "  fun " << v.name << " (" << v.lib.getValue() << ", " << v.minParams << ", " << v.maxParams << ") @ " << v.line << std::endl;
-      }
-    
-    for(auto& v : init.initCalls)
-      std::cout << "  init " << v.call.getValue() << " (" << v.lib.getValue() << ") @ " << std::endl;
-      
+          
+      //for(auto& v : init.initCalls)
+      //  std::cout << "  init " << v.call << " (" << v.lib << ") @ " << std::endl;
+              
       context->activeInit = nullptr;
+      context->comments.clear();
     } else if(name == "getClassName") {
-      //std::cout << "method " << name << " -> " << getCursorKindName(kind) << std::endl;
-      //std::cout << "  usr " << clang_getCursorUSR(cursor) << std::endl;
-      //clang_visitChildren(cursor, *functionDeclVisitor, 0);
+      auto clname = extractStringLiteral(cursor);
+      StringId id = toString(clang_getCursorUSR(cursor));
+      if(!clname.empty())
+        context->names[id] = clname;
     }
     return CXChildVisit_Continue;
   }
@@ -253,7 +337,7 @@ CXChildVisitResult visitRoot(CXCursor cursor, CXCursor parent, CXClientData data
 // ==============================================================================
 
 Parser::Parser() : context(new ParsingContext) {
-  context->index = clang_createIndex(0, 0);
+  context->index = clang_createIndex(1, 1);
   if(!context->index)
     throw std::runtime_error("error creating index");
 }
@@ -277,20 +361,109 @@ void Parser::parseFile(const std::string& filename) {
   for(auto& s : include) 
     args.emplace_back(s.c_str());
   
-  std::cout << "parse" << std::endl;
   context->tu = clang_parseTranslationUnit(context->index, filename.c_str(), args.data(), args.size(), nullptr, 0, CXTranslationUnit_None);
   //CXTranslationUnit translationUnit = clang_parseTranslationUnit(index, 0, argv, argc, 0, 0, CXTranslationUnit_None);
+  
+  /*Compound* root = nullptr;
+  for(auto& c : context->compounds) {
+    if(c.second.parentId.empty()) {
+      if(!root)
+        root = &c.second;
+      else
+        mergeCompounds(*root, c.second, context.get());
+    }
+  }*/
   
   if(!context->tu) {
     std::cerr << "error creating translationUnit" << std::endl;
     return;
   }
-  std::cout << "translate" << std::endl;
   
+  //std::cout << "parsing " << filename << std::endl;
   CXCursor rootCursor = clang_getTranslationUnitCursor(context->tu);  
   clang_visitChildren(rootCursor, *visitRoot, context.get());  
   clang_disposeTranslationUnit(context->tu);
   context->tu = nullptr;
+}
+
+void Parser::writeJSON(const std::string& path) const {
+  using namespace EScript::StringUtils;
+  for(auto& c : context->compounds) {
+    if(c.second.isRef() || c.second.name.empty())
+      continue;
+    std::string fullname = c.second.name;
+    auto pid = c.second.parentId;
+    while(!pid.empty()) {
+      auto& p = context->compounds[pid];
+      if(!p.name.empty())
+        fullname = p.name + "." + fullname;
+      pid = p.parentId;
+    }
+    std::string kind = "unknown";
+    switch(c.second.kind) {
+      case Compound::NAMESPACE:
+        kind = "namespace"; break;
+      case Compound::TYPE:
+        kind = "type"; break;
+      default: break;
+    }
+    
+    std::stringstream json;
+    std::string filename = kind + "_" + replaceAll(fullname, ".", "_") + ".json";
+    json << "{" << std::endl;
+    json << "  \"id\" : \"" << c.second.id << "\"," << std::endl;
+    json << "  \"name\" : \"" << c.second.name << "\"," << std::endl;
+    json << "  \"fullname\" : \"" << fullname << "\"," << std::endl;
+    json << "  \"kind\" : \"";
+    switch(c.second.kind) {
+      case Compound::NAMESPACE:
+        json << "namespace"; break;
+      case Compound::TYPE:
+        json << "type"; break;
+      default:
+        json << "unknown";
+    }
+    json << "\"," << std::endl;
+    json << "  \"location\" : \"" << c.second.location << "\"," << std::endl;
+    if(!c.second.parentId.empty() && !context->compounds[c.second.parentId].name.empty())
+      json << "  \"parent\" : \"" << c.second.parentId << "\"," << std::endl;
+    else
+      json << "  \"parent\" : \"\"," << std::endl;
+    
+    json << "  \"children\" : [" << std::endl;
+    for(auto& v : c.second.children) {
+      json << "    {" << std::endl;
+      json << "      \"name\" : \"" << v.name << "\"," << std::endl;
+      json << "      \"ref\" : \"" << v.ref << "\"," << std::endl;
+      json << "      \"location\" : \"" << v.location << "\"," << std::endl;
+      json << "    }," << std::endl;
+    }
+    json << "  ]," << std::endl;
+    
+    json << "  \"constants\" : [" << std::endl;
+    for(auto& v : c.second.consts) {
+      json << "    {" << std::endl;
+      json << "      \"name\" : \"" << v.name << "\"," << std::endl;
+      json << "      \"location\" : \"" << v.location << "\"," << std::endl;
+      json << "    }," << std::endl;
+    }
+    json << "  ]," << std::endl;
+    
+    json << "  \"functions\" : [" << std::endl;
+    for(auto& v : c.second.functions) {
+      json << "    {" << std::endl;
+      json << "      \"name\" : \"" << v.name << "\"," << std::endl;
+      json << "      \"minParams\" : " << v.minParams << "," <<std::endl;
+      json << "      \"maxParams\" : " << v.maxParams << "," << std::endl;
+      json << "      \"location\" : \"" << v.location << "\"," << std::endl;
+      json << "      \"comment\" : \"" << escape(v.comment) << "\"," << std::endl;
+      json << "    }," << std::endl;
+    }
+    json << "  ]," << std::endl;
+    json << "}" << std::endl;
+    
+    EScript::IO::saveFile(path + "/" + filename, json.str());
+  }
 }
 
 } /* WhatsUpDoc */

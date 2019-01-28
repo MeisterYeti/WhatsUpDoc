@@ -22,9 +22,6 @@ bool isLiteral(CXCursorKind kind);
 
 bool hasType(CXCursor cursor, const std::string& name);
 
-std::string getCursorKindName(CXCursorKind kind);
-std::string getTokenKindName(CXTokenKind kind);
-
 CXCursor getCursorRef(CXCursor cursor);
 
 Location getCursorLocation(CXCursor cursor);
@@ -32,7 +29,10 @@ Location getTokenLocation(CXTranslationUnit tu, CXToken token);
 
 int extractIntLiteral(CXCursor cursor);
 std::string extractStringLiteral(CXCursor cursor);
-
+std::string parseComment(const std::string& comment);
+void printAST(CXCursor cursor, int indent=0);
+void printTokens(CXCursor cursor, int indent=0);
+std::string toJSONFilename(const EScript::StringId& id);
 } /* WhatsUpDoc */
 
 #endif /* end of include guard: WHATSUPDOC_HELPER_H_ */
