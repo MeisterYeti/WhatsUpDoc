@@ -2,16 +2,14 @@
 
 #include <EScript/Utils/StringUtils.h>
 
+#include <regex>
 #include <iostream>
 #include <sstream>
 
 namespace WhatsUpDoc {
 
 std::ostream& operator<<(std::ostream& stream, const CXString& str) {
-  auto cstr = clang_getCString(str);
-  if(cstr && cstr[0] != '\0')
-    stream << cstr;
-  clang_disposeString(str);
+  stream << toString(str);
   return stream;
 }
 
@@ -34,9 +32,10 @@ std::ostream& operator<<(std::ostream& stream, const Location& loc) {
 std::string toString(const CXString& str) {
   auto cstr = clang_getCString(str);
   std::string s;
-  if(cstr && cstr[0] != '\0')
+  if(cstr && cstr[0] != '\0') {
     s = cstr;
-  clang_disposeString(str);
+    clang_disposeString(str);
+  }
   return s;
 }
 
@@ -68,15 +67,22 @@ bool hasType(CXCursor cursor, const std::string& name) {
 CXChildVisitResult getCursorRefVisitor(CXCursor cursor, CXCursor parent, CXClientData client_data) {
   CXCursorKind kind = clang_getCursorKind(cursor);
   auto name = toString(clang_getCursorSpelling(cursor));
-  if(kind == CXCursor_DeclRefExpr) {
-    //std::cout << "      c " << name << " -> " << getCursorKindName(kind) << std::endl;
-    *reinterpret_cast<CXCursor*>(client_data) = cursor;
-    return CXChildVisit_Break;
-  }    
+  
+  //*reinterpret_cast<CXCursor*>(client_data) = clang_getNullCursor();
+  switch (kind) {
+    case CXCursor_MemberRefExpr:
+      return CXChildVisit_Continue;
+    case CXCursor_DeclRefExpr:
+      *reinterpret_cast<CXCursor*>(client_data) = cursor;
+      return CXChildVisit_Break;
+    default: break;
+  }
   return CXChildVisit_Recurse;
 }
 
 CXCursor getCursorRef(CXCursor cursor) {
+  if(clang_getCursorKind(cursor) == CXCursor_DeclRefExpr)
+    return clang_getCursorReferenced(cursor);
   CXCursor refCursor = clang_getNullCursor();
   clang_visitChildren(cursor, *getCursorRefVisitor, &refCursor);
   if(!clang_Cursor_isNull(refCursor)) {
@@ -165,26 +171,21 @@ std::string extractStringLiteral(CXCursor cursor) {
 
 // -------------------------------------------------
 
-std::string parseComment(const std::string& comment) {
+std::string parseComment(const std::string& comment, const Location& location) {
   using namespace EScript::StringUtils;
   // TODO: parse doxygen commands
+  std::stringstream regex;
+  regex << R"((?:(?:/\*(?:!|\*+))|(?://(?:!|/+))|(?:\s*\*+/?)|(?:\s{)" << location.col << R"(}))\s?(.*))";
+  
+  std::regex lineRegex = std::regex(regex.str());
   std::string result;
-  auto tmp = replaceAll(comment, "//!", "///");
-  tmp = replaceAll(tmp, "/*!", "/**");
-  tmp = replaceAll(tmp, "*/", "");
-  auto lines = split(tmp, "\n");
+  auto lines = split(comment, "\n");
   for(auto& line : lines) {
-    auto trimmedLine = lTrim(line);
-    if(trimmedLine.substr(0, 3) == "///" || trimmedLine.substr(0, 3) == "/**") {
-      result += trimmedLine.substr((trimmedLine[3] == ' ' || trimmedLine[3] == '\t') ? 4 : 3) + "\n";
-    } else if(trimmedLine[0] == '*') {
-      result += trimmedLine.substr((trimmedLine[1] == ' ' || trimmedLine[1] == '\t') ? 2 : 1) + "\n";
-    } else {
-      // TODO: remove first spaces
-      result += line + "\n";
-    }
+    line = std::regex_replace(line, lineRegex, "$1");
+    if(!trim(line).empty())
+      result += "\n" + line;
   }
-  return result.substr(0, result.size()-1); // remove last \n
+  return result.substr(1); // remove first \n
 }
 
 // -------------------------------------------------
@@ -197,7 +198,7 @@ CXChildVisitResult printASTVisitor(CXCursor cursor, CXCursor parent, CXClientDat
     std::cout << "  ";
   std::cout << "cursor " << name << " -> " << clang_getCursorKindSpelling(kind) << std::endl;
   indent++;
-  clang_visitChildren(cursor, *extractStringLiteralVisitor, &indent);
+  clang_visitChildren(cursor, *printASTVisitor, &indent);
   return CXChildVisit_Continue;
 }
 
@@ -208,7 +209,7 @@ void printAST(CXCursor cursor, int indent) {
     std::cout << "  ";
   std::cout << "cursor " << name << " -> " << clang_getCursorKindSpelling(kind) << std::endl;
   indent++;
-  clang_visitChildren(cursor, *extractStringLiteralVisitor, &indent);
+  clang_visitChildren(cursor, *printASTVisitor, &indent);
 }
 
 // -------------------------------------------------

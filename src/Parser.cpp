@@ -107,6 +107,8 @@ void mergeCompounds(Compound& c1, Compound& c2, ParsingContext* context) {
   c2.refId = c1.id;
 }
 
+// -------------------------------------------------
+
 void extractComments(CXCursor cursor, ParsingContext* context) {
   CXSourceRange range = clang_getCursorExtent(cursor);
   CXTranslationUnit tu = clang_Cursor_getTranslationUnit(cursor);
@@ -120,10 +122,10 @@ void extractComments(CXCursor cursor, ParsingContext* context) {
       std::string comment = toString(clang_getTokenSpelling(tu, tokens[i]));
       std::string pre = comment.substr(0, 3);
       if(pre == "///" || pre == "//!" || pre == "/**" || pre == "/*!") {
-        comment = parseComment(comment);
+        comment = parseComment(comment, location);
         context->comments.emplace_back(location.line, comment);
       }
-    }    
+    }
   }
   clang_disposeTokens(tu, tokens, nTokens);
 }
@@ -168,13 +170,13 @@ void handleDeclareFunction(CXCursor cursor, ParsingContext* context) {
   FunctionAttr fun;
   fun.location = location;
   if(argc != 3 && argc != 5) {
-    std::cerr << "invalid function declaration at " << location << "." << std::endl;
+    std::cerr << std::endl << "invalid function declaration at " << location << "." << std::endl;
     return;
   }
   CXCursor libRef = getCursorRef(clang_Cursor_getArgument(cursor, 0));
   auto& cmp = resolveCompound(libRef, context);
   if(cmp.isNull()) {
-    std::cerr << "invalid function declaration at " << location << "." << std::endl;
+    std::cerr << std::endl << "invalid function declaration at " << location << "." << std::endl;
     return;
   }
   fun.name = extractStringLiteral(clang_Cursor_getArgument(cursor, 1));
@@ -201,7 +203,7 @@ void handleDeclareConstant(CXCursor cursor, ParsingContext* context) {
   CXCursor libRef = getCursorRef(clang_Cursor_getArgument(cursor, 0));
   auto& cmp = resolveCompound(libRef, context);
   if(cmp.isNull()) {
-    std::cerr << "invalid constant declaration at " << location << "." << std::endl;
+    std::cerr << std::endl << "invalid constant declaration at " << location << "." << std::endl;
     return;
   }
   std::string name;
@@ -215,7 +217,7 @@ void handleDeclareConstant(CXCursor cursor, ParsingContext* context) {
     name = extractStringLiteral(clang_Cursor_getArgument(cursor, 1));
   }
   if(name.empty()) {
-    std::cerr << "could not resolve constant name at " << location << "." << std::endl;
+    std::cerr << std::endl << "could not resolve constant name at " << location << "." << std::endl;
     return;
   }
   
@@ -243,8 +245,9 @@ void handleInitCall(CXCursor cursor, ParsingContext* context) {
   CXCursor libRef = getCursorRef(clang_Cursor_getArgument(cursor, 0));
   auto& cmp = resolveCompound(libRef, context);
   auto& initCmp = resolveCompound(cursorRef, context);
+  
   if(cmp.isNull() || initCmp.isNull()) {
-    std::cerr << "invalid init call at " << getCursorLocation(cursor) << "." << std::endl;
+    std::cerr << std::endl << "invalid init call at " << getCursorLocation(cursor) << "." << std::endl;
     return;
   }
   //nitCall call;
@@ -302,7 +305,7 @@ CXChildVisitResult visitRoot(CXCursor cursor, CXCursor parent, CXClientData data
         return CXChildVisit_Continue;
         
       int argc = clang_Cursor_getNumArguments(cursor);
-      if(argc > 1 || (argc == 1 && !hasType(clang_Cursor_getArgument(cursor, 0), "EScript::Namespace"))) {
+      if(argc != 1 || !hasType(clang_Cursor_getArgument(cursor, 0), "EScript::Namespace")) {
         return CXChildVisit_Continue;
       }
       StringId id = toString(clang_getCursorUSR(cursor));
@@ -337,7 +340,7 @@ CXChildVisitResult visitRoot(CXCursor cursor, CXCursor parent, CXClientData data
 // ==============================================================================
 
 Parser::Parser() : context(new ParsingContext) {
-  context->index = clang_createIndex(1, 1);
+  context->index = clang_createIndex(0, 0);
   if(!context->index)
     throw std::runtime_error("error creating index");
 }
@@ -375,7 +378,7 @@ void Parser::parseFile(const std::string& filename) {
   }*/
   
   if(!context->tu) {
-    std::cerr << "error creating translationUnit" << std::endl;
+    std::cerr << std::endl << "error creating translationUnit" << std::endl;
     return;
   }
   
@@ -388,6 +391,10 @@ void Parser::parseFile(const std::string& filename) {
 
 void Parser::writeJSON(const std::string& path) const {
   using namespace EScript::StringUtils;
+  
+  size_t maxLength = 80;
+  int progress = 0;
+  
   for(auto& c : context->compounds) {
     if(c.second.isRef() || c.second.name.empty())
       continue;
@@ -410,6 +417,11 @@ void Parser::writeJSON(const std::string& path) const {
     
     std::stringstream json;
     std::string filename = kind + "_" + replaceAll(fullname, ".", "_") + ".json";
+      
+    int percent = static_cast<float>(progress)/context->compounds.size()*100;
+    maxLength = std::max(maxLength, filename.size());
+    std::cout << "\r[" << percent << "%] Writing " << filename << std::string(maxLength-filename.size(), ' ') << std::flush;
+    
     json << "{" << std::endl;
     json << "  \"id\" : \"" << c.second.id << "\"," << std::endl;
     json << "  \"name\" : \"" << c.second.name << "\"," << std::endl;
@@ -463,7 +475,9 @@ void Parser::writeJSON(const std::string& path) const {
     json << "}" << std::endl;
     
     EScript::IO::saveFile(path + "/" + filename, json.str());
+    ++progress;
   }
+  std::cout << std::endl << "[100%] Finished writing json" << std::endl;
 }
 
 } /* WhatsUpDoc */

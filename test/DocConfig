@@ -1,0 +1,10 @@
+# Example config file
+
+# The project folder
+PROJECT_FOLDER   = test/API
+# Which folders should be searched for .cpp files
+INPUT            = E_Util EScript
+# Additional include paths used by libclang
+INCLUDE          = Util Geometry
+# The output directory
+OUTPUT_DIRECTORY = ../json
