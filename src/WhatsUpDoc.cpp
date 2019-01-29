@@ -24,6 +24,7 @@ int main(int argc, const char * argv[]) {
   std::string outputFolder = "json";
   std::vector<std::string> includes;
   std::vector<std::string> input;
+  std::vector<std::string> defines;
   
   auto configLines = StringUtils::split(IO::loadFile(argv[1]).str(), "\n");
   int lineNr = 0;
@@ -59,6 +60,12 @@ int main(int argc, const char * argv[]) {
         if(!v.empty())
           includes.emplace_back(v);
       }
+    } else if(key == "PREDEFINED") {
+      for(auto& v : StringUtils::split(value, " ")) {
+        v = StringUtils::trim(v);
+        if(!v.empty())
+          defines.emplace_back(v);
+      }
     }
   }
   
@@ -82,6 +89,9 @@ int main(int argc, const char * argv[]) {
     else
       std::cerr << "invalid include dir '" << inc << "'." << std::endl;
   }
+  
+  for(auto& def : defines)
+    parser.addDefinition(def);
   
   std::vector<std::string> cppfiles;
   size_t maxLength = 1;

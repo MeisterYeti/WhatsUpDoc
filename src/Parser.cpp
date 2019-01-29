@@ -82,17 +82,17 @@ struct ParsingContext {
 // -------------------------------------------------
 
 void mergeCompounds(Compound& c1, Compound& c2, ParsingContext* context) {
-  if(c1.id == c2.id)
-    return;
   //std::cout << "  merge " << c1.id << " & " << c2.id << std::endl;
+  if(c1.id == c2.id) return;
   std::move(c2.functions.begin(), c2.functions.end(), std::back_inserter(c1.functions));
   c2.functions.clear();
   
   std::move(c2.consts.begin(), c2.consts.end(), std::back_inserter(c1.consts));
   c2.consts.clear();
   
-  for(auto& v : c2.children)
+  for(auto& v : c2.children) {
     context->compounds[v.ref].parentId = c1.id;
+  }
   std::move(c2.children.begin(), c2.children.end(), std::back_inserter(c1.children));
   c2.children.clear();
   
@@ -148,21 +148,21 @@ Compound& resolveCompound(CXCursor cursor, ParsingContext* context) {
     }
   }
   
-  auto& cmp = context->compounds[id];
-  if(cmp.isNull()) {
-    cmp.id = id;
-    cmp.location = getCursorLocation(cursor);
-    //std::cout << "  resolve " << cmp.id << std::endl;
+  auto* cmp = &context->compounds[id];
+  if(cmp->isNull()) {
+    cmp->id = id;
+    cmp->location = getCursorLocation(cursor);
+    //std::cout << "  resolve " << cmp->id << std::endl;
     if(hasType(cursor, "EScript::Namespace"))
-      cmp.kind = Compound::NAMESPACE; 
+      cmp->kind = Compound::NAMESPACE; 
     else if(hasType(cursor, "EScript::Type"))
-      cmp.kind = Compound::TYPE;
+      cmp->kind = Compound::TYPE;
   } else {
-    while(cmp.isRef())
-      cmp = context->compounds[cmp.refId];
-    //std::cout << "  resolve ref " << cmp.id << std::endl;
+    while(cmp->isRef())
+      cmp = &context->compounds[cmp->refId];
+    //std::cout << "  resolve ref " << cmp->id << std::endl;
   }
-  return cmp;
+  return *cmp;
 }
 
 // -------------------------------------------------
@@ -355,13 +355,17 @@ CXChildVisitResult visitRoot(CXCursor cursor, CXCursor parent, CXClientData data
 // ==============================================================================
 
 Parser::Parser() : context(new ParsingContext) {
-  context->index = clang_createIndex(0, 0);
+  context->index = clang_createIndex(1, 1);
   if(!context->index)
     throw std::runtime_error("error creating index");
 }
 
 Parser::~Parser() {
   clang_disposeIndex(context->index);
+}
+
+void Parser::addDefinition(const std::string& def) {
+  include.emplace_back("-D" + def);
 }
 
 void Parser::addInclude(const std::string& path) {
@@ -371,11 +375,16 @@ void Parser::addInclude(const std::string& path) {
 void Parser::parseFile(const std::string& filename) {
   // = { "-x", "c++", "-Wdocumentation", "-fparse-all-comments", "-Itest", "-Itest/EScript", "-Itest/E_Util" };
   std::vector<const char*> args;
-  args.reserve(include.size() + 4);
+  args.reserve(include.size() + 7);
   args.emplace_back("-x");
   args.emplace_back("c++");
-  args.emplace_back("-Wdocumentation");
+  args.emplace_back("-std=c++11");
+  //args.emplace_back("-Wdocumentation");
   args.emplace_back("-fparse-all-comments");
+  args.emplace_back("-Wno-inconsistent-missing-override");
+  #ifdef _WIN32
+    args.emplace_back("--target=x86_64-w64-mingw32");
+  #endif
   for(auto& s : include) 
     args.emplace_back(s.c_str());
   
@@ -411,8 +420,11 @@ void Parser::writeJSON(const std::string& path) const {
   int progress = 0;
   
   for(auto& c : context->compounds) {
-    if(c.second.isRef() || c.second.name.empty())
+    if(c.second.isRef() || c.second.name.empty()) {
+      ++progress;
       continue;
+    }
+    
     std::string fullname = c.second.name;
     auto pid = c.second.parentId;
     while(!pid.empty()) {

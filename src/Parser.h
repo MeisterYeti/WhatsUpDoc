@@ -14,10 +14,12 @@ public:
   ~Parser();
   
   void addInclude(const std::string& path);
+  void addDefinition(const std::string& def);
   void parseFile(const std::string& filename);
   void writeJSON(const std::string& path) const;
 private:
   std::vector<std::string> include;
+  std::vector<std::string> define;
   std::unique_ptr<ParsingContext> context;
 };
 
