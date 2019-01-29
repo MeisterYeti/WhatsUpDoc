@@ -21,12 +21,14 @@ struct FunctionAttr {
   int maxParams = 0;
   std::string name;
   std::string comment;
+  std::string cpp;
 };
 
 struct ConstAttr {
   Location location;
   std::string name;
   std::string comment;
+  std::string cpp;
 };
 
 struct RefAttr {
@@ -155,8 +157,9 @@ Compound& resolveCompound(CXCursor cursor, ParsingContext* context) {
       cmp.kind = Compound::NAMESPACE; 
     else if(hasType(cursor, "EScript::Type"))
       cmp.kind = Compound::TYPE;
-  } else if(cmp.isRef()) {
-    cmp = context->compounds[cmp.refId];
+  } else {
+    while(cmp.isRef())
+      cmp = context->compounds[cmp.refId];
     //std::cout << "  resolve ref " << cmp.id << std::endl;
   }
   return cmp;
@@ -191,6 +194,12 @@ void handleDeclareFunction(CXCursor cursor, ParsingContext* context) {
   if(!fun.comment.empty())
     fun.comment = fun.comment.substr(0, fun.comment.size()-1); // remove last \n
   
+  // try to find corresponding c++ function
+  CXCursor fnArg = getCursorRef(clang_Cursor_getArgument(cursor, argc == 5 ? 4 : 2));
+  CXCursor fnRef = findCall(fnArg, fun.name);
+  if(!clang_Cursor_isNull(fnRef))
+    fun.cpp = getFullyQualifiedName(fnRef);
+  
   cmp.functions.emplace_back(std::move(fun));
 }
 
@@ -221,6 +230,7 @@ void handleDeclareConstant(CXCursor cursor, ParsingContext* context) {
     return;
   }
   
+    
   CXCursor valueRef = getCursorRef(clang_Cursor_getArgument(cursor, 2));
   if(!clang_Cursor_isNull(valueRef) && (hasType(valueRef, "EScript::Namespace") || hasType(valueRef, "EScript::Type"))) {
     auto& cmpRef = resolveCompound(valueRef, context);
@@ -231,7 +241,13 @@ void handleDeclareConstant(CXCursor cursor, ParsingContext* context) {
     RefAttr attr{location, name, cmpRef.id};
     cmp.children.emplace_back(std::move(attr));
   } else {
-    ConstAttr attr{location, name, ""};
+    ConstAttr attr{location, name, "", ""};
+    
+    // try to find corresponding c++ object
+    CXCursor objRef = findCall(clang_Cursor_getArgument(cursor, 2), name);
+    if(!clang_Cursor_isNull(objRef))
+      attr.cpp = getFullyQualifiedName(objRef);
+    
     cmp.consts.emplace_back(std::move(attr));
   }
 }
@@ -241,7 +257,7 @@ void handleDeclareConstant(CXCursor cursor, ParsingContext* context) {
 void handleInitCall(CXCursor cursor, ParsingContext* context) {
   CXCursor cursorRef = clang_getCursorReferenced(cursor);
   int argc = clang_Cursor_getNumArguments(cursor);
-  if(argc < 1) return;
+  if(argc != 1) return;
   CXCursor libRef = getCursorRef(clang_Cursor_getArgument(cursor, 0));
   auto& cmp = resolveCompound(libRef, context);
   auto& initCmp = resolveCompound(cursorRef, context);
@@ -253,8 +269,7 @@ void handleInitCall(CXCursor cursor, ParsingContext* context) {
   //nitCall call;
   //all.call = initCmp.id;
   //all.lib = cmp.id;
-  mergeCompounds(cmp, initCmp, context);
-  
+  mergeCompounds(cmp, initCmp, context);  
   //context->activeInit->initCalls.emplace_back(std::move(call));
 }
 
@@ -457,6 +472,7 @@ void Parser::writeJSON(const std::string& path) const {
       json << "    {" << std::endl;
       json << "      \"name\" : \"" << v.name << "\"," << std::endl;
       json << "      \"location\" : \"" << v.location << "\"," << std::endl;
+      json << "      \"cpp\" : \"" << v.cpp << "\"," << std::endl;
       json << "    }," << std::endl;
     }
     json << "  ]," << std::endl;
@@ -469,6 +485,7 @@ void Parser::writeJSON(const std::string& path) const {
       json << "      \"maxParams\" : " << v.maxParams << "," << std::endl;
       json << "      \"location\" : \"" << v.location << "\"," << std::endl;
       json << "      \"comment\" : \"" << escape(v.comment) << "\"," << std::endl;
+      json << "      \"cpp\" : \"" << v.cpp << "\"," << std::endl;
       json << "    }," << std::endl;
     }
     json << "  ]," << std::endl;

@@ -258,4 +258,55 @@ std::string toJSONFilename(const EScript::StringId& id) {
 }
 
 // -------------------------------------------------
+
+struct FindCallResult {
+  CXCursor cursor;
+  std::string name;
+};
+
+CXChildVisitResult findCallVisitor(CXCursor cursor, CXCursor parent, CXClientData client_data) {
+  CXCursorKind kind = clang_getCursorKind(cursor);
+  auto name = toString(clang_getCursorSpelling(cursor));
+  switch(kind) {
+    case CXCursor_MemberRefExpr:
+    case CXCursor_DeclRefExpr: {
+      auto* result = reinterpret_cast<FindCallResult*>(client_data);
+      if(!name.empty() && name == result->name) {
+        result->cursor = cursor;
+        return CXChildVisit_Break;
+      }
+      break;
+    }
+    default: break;
+  }
+  return CXChildVisit_Recurse;
+}
+
+CXCursor findCall(CXCursor cursor, const std::string& name) {
+  FindCallResult result{clang_getNullCursor(), name};
+  if(findCallVisitor(cursor, clang_getNullCursor(), &result) != CXChildVisit_Break)
+    clang_visitChildren(cursor, *findCallVisitor, &result);
+  
+  if(!clang_Cursor_isNull(result.cursor)) {
+    return clang_getCursorReferenced(result.cursor);
+  }
+  return result.cursor;
+}
+
+// -------------------------------------------------
+
+std::string getFullyQualifiedName(CXCursor cursor) {
+  std::string name = "";
+  CXCursorKind kind = clang_getCursorKind(cursor);
+  if(!clang_Cursor_isNull(cursor) && kind != CXCursor_TranslationUnit) {
+    name = getFullyQualifiedName(clang_getCursorSemanticParent(cursor));
+    if(!name.empty())
+      name += "::";
+    name += toString(clang_getCursorSpelling(cursor));
+  }
+  return name;
+}
+
+// -------------------------------------------------
+
 } /* WhatsUpDoc */

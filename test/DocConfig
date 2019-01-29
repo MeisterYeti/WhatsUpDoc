@@ -3,8 +3,8 @@
 # The project folder
 PROJECT_FOLDER   = test/API
 # Which folders should be searched for .cpp files
-INPUT            = E_Util EScript
+INPUT            = E_MinSG
 # Additional include paths used by libclang
-INCLUDE          = Util Geometry
+INCLUDE          = Geometry GUI MinSG Rendering Sound Util EScript
 # The output directory
 OUTPUT_DIRECTORY = ../json

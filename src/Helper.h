@@ -33,6 +33,10 @@ std::string parseComment(const std::string& comment, const Location& location);
 void printAST(CXCursor cursor, int indent=0);
 void printTokens(CXCursor cursor, int indent=0);
 std::string toJSONFilename(const EScript::StringId& id);
+
+CXCursor findCall(CXCursor cursor, const std::string& name);
+
+std::string getFullyQualifiedName(CXCursor cursor);
 } /* WhatsUpDoc */
 
 #endif /* end of include guard: WHATSUPDOC_HELPER_H_ */
