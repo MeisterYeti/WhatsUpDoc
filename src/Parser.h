@@ -15,6 +15,7 @@ public:
   
   void addInclude(const std::string& path);
   void addDefinition(const std::string& def);
+  void addFlag(const std::string& flag);
   void parseFile(const std::string& filename);
   void writeJSON(const std::string& path) const;
 private:

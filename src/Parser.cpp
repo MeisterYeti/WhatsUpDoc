@@ -368,6 +368,10 @@ void Parser::addDefinition(const std::string& def) {
   include.emplace_back("-D" + def);
 }
 
+void Parser::addFlag(const std::string& flag) {
+  include.emplace_back(flag);
+}
+
 void Parser::addInclude(const std::string& path) {
   include.emplace_back("-I" + path);
 }

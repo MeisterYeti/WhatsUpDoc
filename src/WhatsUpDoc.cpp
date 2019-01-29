@@ -25,6 +25,7 @@ int main(int argc, const char * argv[]) {
   std::vector<std::string> includes;
   std::vector<std::string> input;
   std::vector<std::string> defines;
+  std::vector<std::string> flags;
   
   auto configLines = StringUtils::split(IO::loadFile(argv[1]).str(), "\n");
   int lineNr = 0;
@@ -66,7 +67,13 @@ int main(int argc, const char * argv[]) {
         if(!v.empty())
           defines.emplace_back(v);
       }
+    } else if(key == "FLAGS") {
+    for(auto& v : StringUtils::split(value, " ")) {
+      v = StringUtils::trim(v);
+      if(!v.empty())
+        flags.emplace_back(v);
     }
+  }
   }
   
   if(IO::getEntryType(projectFolder) != IO::TYPE_DIRECTORY) {
@@ -92,6 +99,9 @@ int main(int argc, const char * argv[]) {
   
   for(auto& def : defines)
     parser.addDefinition(def);
+    
+  for(auto& flag : flags)
+    parser.addFlag(flag);
   
   std::vector<std::string> cppfiles;
   size_t maxLength = 1;
