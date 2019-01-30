@@ -4,7 +4,7 @@
 #include "Helper.h"
 
 #include <string>
-#include <vector>
+#include <deque>
 #include <memory>
 
 namespace WhatsUpDoc {
@@ -19,9 +19,7 @@ public:
   Token(uint32_t line, uint32_t type) : type(type), line(line) {}
   uint32_t getType() const { return type; }
   template<class T>
-  static T* to(Token* t) { return static_cast<T*>(t); }
-  template<class T>
-  static T* to(std::unique_ptr<Token>& t) { return static_cast<T*>(t.get()); }
+  T* to() { return static_cast<T*>(this); }
 };
 
 class TTextLine : public Token {
@@ -74,7 +72,7 @@ public:
 } /* CommentTokens */
 
 typedef std::unique_ptr<CommentTokens::Token> CommentTokenPtr;
-std::vector<CommentTokenPtr> parseComment(const std::string& comment, const Location& location);
+std::deque<CommentTokenPtr> parseComment(const std::string& comment, const Location& location);
 
 } /* WhatsUpDoc */
 

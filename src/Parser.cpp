@@ -59,6 +59,7 @@ struct Compound {
 struct InitFunction {
   StringId id;
   StringId paramId;
+  StringId group;
   Location location;
 };
 
@@ -135,6 +136,11 @@ void extractComments(CXCursor cursor, ParsingContext* context) {
       std::string pre = comment.substr(0, 3);
       if(pre == "///" || pre == "//!" || pre == "/**" || pre == "/*!") {
         auto comments = parseComment(comment, location);
+        // merge consecutive comment blocks
+        if(!context->comments.empty() && !comments.empty() && 
+              context->comments.back()->getType() == CommentTokens::TCommentEnd::TYPE && 
+              context->comments.back()->line == comments.front()->line)
+          context->comments.pop_back();
         std::move(comments.begin(), comments.end(), back_inserter(context->comments));
       }
     }
@@ -186,25 +192,28 @@ std::string resolveComments(const Location& location, ParsingContext* context) {
     context->activeGroup = StringId();
   if(!context->memberGroupBlock)
     context->activeMemberGroup = StringId();
+  StringId defGrp;
   
   while(!context->comments.empty() && context->comments.front()->line <= location.line) {
     auto& token = context->comments.front();
     cloc.line = token->line;
     switch(token->getType()) {
       case TDefGroup::TYPE: {
-        auto t = token->to<TDefGroup>(token);
+        auto t = token->to<TDefGroup>();
         auto& grp = context->compounds[t->id];
         grp.id = t->id;
         grp.name = t->name;
         grp.kind = Compound::GROUP;
         grp.location = cloc;
-        context->activeGroup = grp.id;
+        //context->activeGroup = grp.id;
+        defGrp = grp.id;
         descriptionMode = true;
         break;
       }
       case TInGroup::TYPE: {
-        auto t = token->to<TInGroup>(token);
+        auto t = token->to<TInGroup>();
         auto& grp = context->compounds[t->id];
+        defGrp = StringId();
         if(grp.id.empty()) {
           std::cerr << std::endl << "Unknown group '" << t->id << "' at " << cloc << "." << std::endl;
         } else {
@@ -213,7 +222,7 @@ std::string resolveComments(const Location& location, ParsingContext* context) {
         break;
       }
       case TMemberGroup::TYPE: {
-        auto t = token->to<TMemberGroup>(token);
+        auto t = token->to<TMemberGroup>();
         context->activeMemberGroup = t->id;
         break;
       }
@@ -222,6 +231,9 @@ std::string resolveComments(const Location& location, ParsingContext* context) {
         if(!context->activeMemberGroup.empty()) {
           context->memberGroupBlock = true;
         } else if(!context->activeGroup.empty()) {
+          context->groupBlock = true;
+        } else if(!defGrp.empty()) {
+          context->activeGroup = defGrp;
           context->groupBlock = true;
         } else {
           std::cerr << std::endl << "Invalid group start at " << cloc << "." << std::endl;
@@ -242,13 +254,14 @@ std::string resolveComments(const Location& location, ParsingContext* context) {
         break;
       }
       case TCommentEnd::TYPE: {
+        defGrp = StringId();
         descriptionMode = false;
         break;
       }
       case TTextLine::TYPE: {
-        auto t = token->to<TTextLine>(token);
-        if(descriptionMode && !context->activeGroup.empty()) {
-          auto& grp = context->compounds[context->activeGroup];
+        auto t = token->to<TTextLine>();
+        if(descriptionMode && !defGrp.empty()) {
+          auto& grp = context->compounds[defGrp];
           if(!grp.decription.empty()) grp.decription += "\n";
           grp.decription += t->text;
         } else {
@@ -288,7 +301,7 @@ void handleDeclareFunction(CXCursor cursor, ParsingContext* context) {
     fun.maxParams = extractIntLiteral(clang_Cursor_getArgument(cursor, 3));
   }
   if(!context->activeMemberGroup.empty())
-    fun.group = context->activeGroup.toString();
+    fun.group = context->activeMemberGroup.toString();
   
   // try to find corresponding c++ function
   CXCursor fnArg = getCursorRef(clang_Cursor_getArgument(cursor, argc == 5 ? 4 : 2));
@@ -313,6 +326,7 @@ void handleDeclareConstant(CXCursor cursor, ParsingContext* context) {
     return;
   }
   std::string name;
+  StringId libId = toString(clang_getCursorUSR(libRef));
   CXCursor nameRef = getCursorRef(clang_Cursor_getArgument(cursor, 1));
   if(!clang_Cursor_isNull(nameRef)) {
     StringId refId = toString(clang_getCursorUSR(nameRef));
@@ -333,10 +347,18 @@ void handleDeclareConstant(CXCursor cursor, ParsingContext* context) {
     cmpRef.name = name;
     if(cmpRef.id == cmp.id)
       return;
-    cmpRef.parentId = cmp.id;    
-    if(!context->activeGroup.empty())
-      cmpRef.group = context->activeGroup;
+    cmpRef.parentId = cmp.id;
     Reference attr{name, cmp.id, location, cmpRef.id};
+    if(!context->activeGroup.empty()) {
+      cmpRef.group = context->activeGroup;
+    } else if(libId == context->activeInit.paramId) {
+      cmpRef.group = context->activeInit.group;
+    }
+    
+    if(!cmpRef.group.empty()) {
+      auto& grp = context->compounds[cmpRef.group];
+      grp.children.push_back(attr);
+    }
     cmp.children.emplace_back(std::move(attr));
   } else {
     Member attr;
@@ -377,13 +399,15 @@ void handleInitCall(CXCursor cursor, ParsingContext* context) {
   resolveComments(location, context);
   if(!context->activeGroup.empty()) {
     call.group = context->activeGroup;
+    auto& grp = context->compounds[context->activeGroup];
     for(auto& ref : initCmp.children) {
       auto& c = context->compounds[ref.ref];
       c.group = context->activeGroup;
+      grp.children.push_back(ref);
     }
   }
   mergeCompounds(cmp, initCmp, context);
-  context->initCalls[initCmp.id] = std::move(call);
+  context->initCalls[call.id] = std::move(call);
 }
 
 // -------------------------------------------------
@@ -442,8 +466,11 @@ CXChildVisitResult visitRoot(CXCursor cursor, CXCursor parent, CXClientData data
       resolveCompound(clang_Cursor_getArgument(cursor, 0), context);
       auto& call = context->initCalls[context->activeInit.id];
       if(!call.group.empty()) {
-        context->activeGroup = call.group;
-        context->groupBlock = true;
+        context->activeInit.group = call.group;
+        //context->activeGroup = call.group;
+        //context->groupBlock = true;
+      } else {
+        context->activeInit.group = StringId();
       }
       
       //std::cout << "init " << id << std::endl;
@@ -586,7 +613,8 @@ void Parser::writeJSON(const std::string& path) const {
     if(!c.second.group.empty() && !context->compounds[c.second.group].name.empty())
       json << "  \"group\" : \"" << c.second.group << "\"," << std::endl;
     else
-      json << "  \"group\" : \"\"," << std::endl;
+      json << "  \"group\" : \"\"," << std::endl;      
+    json << "  \"description\" : \"" << escape(c.second.decription) << "\"," << std::endl;
     
     json << "  \"children\" : [" << std::endl;
     for(auto& v : c.second.children) {

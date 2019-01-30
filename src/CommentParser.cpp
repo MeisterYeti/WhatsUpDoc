@@ -10,8 +10,8 @@ using namespace EScript::StringUtils;
 
 // -------------------------------------------------
 
-std::vector<CommentTokenPtr> parseComment(const std::string& comment, const Location& location) {
-  std::vector<CommentTokenPtr> result;
+std::deque<CommentTokenPtr> parseComment(const std::string& comment, const Location& location) {
+  std::deque<CommentTokenPtr> result;
   
   // TODO: parse doxygen commands
   std::stringstream regex;
@@ -19,7 +19,8 @@ std::vector<CommentTokenPtr> parseComment(const std::string& comment, const Loca
   std::regex lineRegex = std::regex(regex.str());
   
   std::regex defGrpRegex = std::regex(R"((?:@|\\)defgroup\s+(\w+)\s+(.*))");
-  std::regex grpRegex = std::regex(R"((?:@|\\)(addtogroup|ingroup|name)\s+(\w+))");
+  std::regex grpRegex = std::regex(R"((?:@|\\)(addtogroup|ingroup)\s+(\w+))");
+  std::regex mgrpRegex = std::regex(R"((?:@|\\)(name)\s+(.*))");
   std::regex blockRegex = std::regex(R"(@(\{|\}))");
   
   auto lines = split(comment, "\n");  
@@ -30,10 +31,9 @@ std::vector<CommentTokenPtr> parseComment(const std::string& comment, const Loca
     if(std::regex_match(line, match, defGrpRegex)) {
       result.emplace_back(new TDefGroup(i,match[1],match[2]));
     } else if(std::regex_match(line, match, grpRegex)) {
-      if(match[1] == "name")
-        result.emplace_back(new TMemberGroup(i,match[2]));
-      else
-        result.emplace_back(new TInGroup(i,match[2]));
+      result.emplace_back(new TInGroup(i,match[2]));
+    } else if(std::regex_match(line, match, mgrpRegex)) {
+      result.emplace_back(new TMemberGroup(i,match[2]));
     } else if(std::regex_match(line, match, blockRegex)) {
       if(match[1] == "{")
         result.emplace_back(new TBlockStart(i));
@@ -44,6 +44,11 @@ std::vector<CommentTokenPtr> parseComment(const std::string& comment, const Loca
     }
     ++i;
   }
+  // remove first & last empty lines
+  if(!result.empty() && result.front()->getType() == TTextLine::TYPE && trim(result.front()->to<TTextLine>()->text).empty())
+    result.pop_front();
+  if(!result.empty() && result.back()->getType() == TTextLine::TYPE && trim(result.back()->to<TTextLine>()->text).empty())
+    result.pop_back();
   result.emplace_back(new TCommentEnd(i));
   return result;
 }
