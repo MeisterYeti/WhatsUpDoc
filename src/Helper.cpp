@@ -2,7 +2,6 @@
 
 #include <EScript/Utils/StringUtils.h>
 
-#include <regex>
 #include <iostream>
 #include <sstream>
 
@@ -167,25 +166,6 @@ std::string extractStringLiteral(CXCursor cursor) {
   if(!value.empty() && value.find('\"') != std::string::npos)
     value = value.substr(1, value.size()-2);
   return value;
-}
-
-// -------------------------------------------------
-
-std::string parseComment(const std::string& comment, const Location& location) {
-  using namespace EScript::StringUtils;
-  // TODO: parse doxygen commands
-  std::stringstream regex;
-  regex << R"((?:(?:/\*(?:!|\*+))|(?://(?:!|/+))|(?:\s*\*+/?)|(?:\s{)" << location.col << R"(}))\s?(.*))";
-  
-  std::regex lineRegex = std::regex(regex.str());
-  std::string result;
-  auto lines = split(comment, "\n");
-  for(auto& line : lines) {
-    line = std::regex_replace(line, lineRegex, "$1");
-    if(!trim(line).empty())
-      result += "\n" + line;
-  }
-  return result.substr(1); // remove first \n
 }
 
 // -------------------------------------------------

@@ -19,6 +19,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # add C++ source files to the project
 add_executable(${PROJECT_NAME}
+	src/CommentParser.cpp
 	src/Helper.cpp
 	src/Parser.cpp
 	src/WhatsUpDoc.cpp

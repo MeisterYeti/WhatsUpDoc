@@ -29,7 +29,6 @@ Location getTokenLocation(CXTranslationUnit tu, CXToken token);
 
 int extractIntLiteral(CXCursor cursor);
 std::string extractStringLiteral(CXCursor cursor);
-std::string parseComment(const std::string& comment, const Location& location);
 void printAST(CXCursor cursor, int indent=0);
 void printTokens(CXCursor cursor, int indent=0);
 std::string toJSONFilename(const EScript::StringId& id);
