@@ -391,6 +391,7 @@ void handleDeclareConstant(CXCursor cursor, ParsingContext* context) {
     if(cmpRef.id == cmp.id)
       return;
     cmpRef.parentId = cmp.id;
+    cmpRef.group = grpId;
     Reference attr{name, cmp.id, location, cmpRef.id};
     if(!cmpRef.group.empty()) {
       auto& grp = context->compounds[cmpRef.group];
@@ -615,6 +616,14 @@ void Parser::writeJSON(const std::string& path) const {
     auto& cmp = c.second;
     if(cmp.isRef() || cmp.name.empty())
       continue;
+    
+    if(cmp.kind == Compound::GROUP) {
+      if(!cmp.children.empty()) {
+        cmp.parentId = getCompound(cmp.children.front().compound, context.get()).id;
+      } else if(!cmp.member.empty()) {
+        cmp.parentId = getCompound(cmp.member.front().compound, context.get()).id;
+      }
+    }
     
     cmp.fullname = cmp.name;
     auto pid = cmp.parentId;
