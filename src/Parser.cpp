@@ -227,11 +227,8 @@ std::string resolveComments(const Location& location, ParsingContext* context) {
         auto t = token->to<TInGroup>();
         auto& grp = context->compounds[t->id];
         defGrp = StringId();
-        if(grp.id.empty()) {
-          std::cerr << std::endl << "Unknown group '" << t->id << "' at " << cloc << "." << std::endl;
-        } else {
-          context->activeGroup = grp.id;
-        }
+        grp.id = t->id;
+        context->activeGroup = grp.id;
         break;
       }
       case TMemberGroup::TYPE: {
@@ -446,8 +443,10 @@ void handleInitCall(CXCursor cursor, ParsingContext* context) {
     auto& grp = context->compounds[context->activeGroup];
     for(auto& ref : initCmp.children) {
       auto& c = context->compounds[ref.ref];
-      c.group = context->activeGroup;
-      grp.children.push_back(ref);
+      if(c.group.empty()) {
+        c.group = context->activeGroup;
+        grp.children.push_back(ref);
+      }
     }
   }
   mergeCompounds(cmp, initCmp, context);

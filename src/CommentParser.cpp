@@ -7,6 +7,14 @@ namespace WhatsUpDoc {
 using namespace CommentTokens;
 using namespace EScript::StringUtils;
 
+// -------------------------------------------------
+
+std::string escapeMarkdown(const std::string& str) {
+  return replaceMultiple(str, {
+    {"|","\\|"},
+    {"*","\\*"},
+  });
+}
 
 // -------------------------------------------------
 
@@ -42,10 +50,10 @@ std::deque<CommentTokenPtr> parseComment(const std::string& comment, const Locat
         result.emplace_back(new TBlockEnd(i));
     } else if(std::regex_match(line, match, deprRegex)) {
       if(!trim(match[1]).empty())
-        result.emplace_back(new TTextLine(i, escape(match[1])));
+        result.emplace_back(new TTextLine(i, escapeMarkdown(match[1])));
       result.emplace_back(new TDeprecated(i, match[2]));
     } else {
-      result.emplace_back(new TTextLine(i, escape(line)));
+      result.emplace_back(new TTextLine(i, escapeMarkdown(line)));
     }
     ++i;
   }
