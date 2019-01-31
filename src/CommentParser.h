@@ -68,6 +68,13 @@ public:
   static const uint32_t TYPE = 7;
   TCommentEnd(uint32_t line) : Token(line, TYPE) {}
 };
+
+class TDeprecated : public Token {
+public:
+  static const uint32_t TYPE = 8;
+  const std::string description;
+  TDeprecated(uint32_t line, const std::string& descr) : Token(line, TYPE), description(descr) {}
+};
   
 } /* CommentTokens */
 

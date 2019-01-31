@@ -26,6 +26,7 @@ struct Member {
   std::string group;
   int minParams = 0;
   int maxParams = 0;
+  bool deprecated = false;
 };
 
 struct Reference {
@@ -47,6 +48,7 @@ struct Compound {
   StringId parentId;
   StringId group;
   std::string name;
+  std::string fullname;
   std::string decription;
   Location location;
   enum {UNKNOWN, NAMESPACE, TYPE, GROUP} kind = UNKNOWN;
@@ -71,6 +73,7 @@ struct ParsingContext {
   bool groupBlock = false;
   StringId activeMemberGroup;
   bool memberGroupBlock = false;
+  bool deprecated = false; 
   //std::unordered_map<StringId, InitFunction> inits;
   std::unordered_map<StringId, std::string> names;
   std::deque<CommentTokenPtr> comments;
@@ -150,6 +153,19 @@ void extractComments(CXCursor cursor, ParsingContext* context) {
 
 // -------------------------------------------------
 
+Compound& getCompound(const StringId& id, ParsingContext* context) {
+  static Compound nullCompound;
+  if(id.empty())
+    return nullCompound;
+  auto* cmp = &context->compounds[id];
+  while(cmp->isRef()) {
+    cmp = &context->compounds[cmp->refId];
+  }
+  return *cmp;
+}
+
+// -------------------------------------------------
+
 Compound& resolveCompound(CXCursor cursor, ParsingContext* context) {
   static Compound nullCompound;
   if(clang_Cursor_isNull(cursor) || (!hasType(cursor, "EScript::Namespace") && !hasType(cursor, "EScript::Type")))
@@ -163,21 +179,17 @@ Compound& resolveCompound(CXCursor cursor, ParsingContext* context) {
       id = toString(clang_getCursorUSR(ref));
     }
   }
-  auto* cmp = &context->compounds[id];
-  if(cmp->isNull()) {
-    cmp->id = id;
-    cmp->location = getCursorLocation(cursor);
+  auto& cmp = getCompound(id, context);
+  if(cmp.isNull()) {
+    cmp.id = id;
+    cmp.location = getCursorLocation(cursor);
     //std::cout << "  resolve " << cmp->id << std::endl;
     if(hasType(cursor, "EScript::Namespace"))
-      cmp->kind = Compound::NAMESPACE; 
+      cmp.kind = Compound::NAMESPACE; 
     else if(hasType(cursor, "EScript::Type"))
-      cmp->kind = Compound::TYPE;
-  } else {
-    while(cmp->isRef())
-      cmp = &context->compounds[cmp->refId];
-    //std::cout << "  resolve ref " << cmp->id << std::endl;
+      cmp.kind = Compound::TYPE;
   }
-  return *cmp;
+  return cmp;
 }
 
 // -------------------------------------------------
@@ -192,6 +204,7 @@ std::string resolveComments(const Location& location, ParsingContext* context) {
     context->activeGroup = StringId();
   if(!context->memberGroupBlock)
     context->activeMemberGroup = StringId();
+  context->deprecated = false;
   StringId defGrp;
   
   while(!context->comments.empty() && context->comments.front()->line <= location.line) {
@@ -262,12 +275,22 @@ std::string resolveComments(const Location& location, ParsingContext* context) {
         auto t = token->to<TTextLine>();
         if(descriptionMode && !defGrp.empty()) {
           auto& grp = context->compounds[defGrp];
-          if(!grp.decription.empty()) grp.decription += "\n";
+          if(!grp.decription.empty()) grp.decription += "<br/>";
           grp.decription += t->text;
         } else {
-          if(!result.empty()) result += "\n";
+          if(!result.empty()) result += "<br/>";
           result += t->text;
         }
+        break;
+      }
+      case TDeprecated::TYPE: {
+        auto t = token->to<TDeprecated>();
+        context->deprecated = true;
+        if(!result.empty()) result += "<br/>";
+        if(t->description.empty())
+          result += "**Deprecated**";
+        else
+          result += "**Deprecated:** " + t->description;
         break;
       }
     }
@@ -294,6 +317,7 @@ void handleDeclareFunction(CXCursor cursor, ParsingContext* context) {
     std::cerr << std::endl << "invalid function declaration at " << location << "." << std::endl;
     return;
   }
+  StringId libId = toString(clang_getCursorUSR(libRef));
   fun.name = extractStringLiteral(clang_Cursor_getArgument(cursor, 1));
   fun.compound = cmp.id;
   if(argc == 5) {
@@ -302,14 +326,27 @@ void handleDeclareFunction(CXCursor cursor, ParsingContext* context) {
   }
   if(!context->activeMemberGroup.empty())
     fun.group = context->activeMemberGroup.toString();
+  fun.deprecated = context->deprecated;
   
   // try to find corresponding c++ function
   CXCursor fnArg = getCursorRef(clang_Cursor_getArgument(cursor, argc == 5 ? 4 : 2));
   CXCursor fnRef = findCall(fnArg, fun.name);
   if(!clang_Cursor_isNull(fnRef))
     fun.cppRef = getFullyQualifiedName(fnRef);
+  StringId grpId;
   
-  cmp.member.emplace_back(std::move(fun));
+  if(!context->activeGroup.empty()) {
+    grpId = context->activeGroup;
+  } else if(libId == context->activeInit.paramId) {
+    grpId = context->activeInit.group;
+  }
+  
+  if(!grpId.empty()) {
+    auto& grp = context->compounds[grpId];
+    grp.member.emplace_back(std::move(fun));
+  } else {
+    cmp.member.emplace_back(std::move(fun));
+  }
 }
 
 // -------------------------------------------------
@@ -341,6 +378,13 @@ void handleDeclareConstant(CXCursor cursor, ParsingContext* context) {
     return;
   }
     
+  StringId grpId;
+  if(!context->activeGroup.empty()) {
+    grpId = context->activeGroup;
+  } else if(libId == context->activeInit.paramId) {
+    grpId = context->activeInit.group;
+  }
+  
   CXCursor valueRef = getCursorRef(clang_Cursor_getArgument(cursor, 2));
   if(!clang_Cursor_isNull(valueRef) && (hasType(valueRef, "EScript::Namespace") || hasType(valueRef, "EScript::Type"))) {
     auto& cmpRef = resolveCompound(valueRef, context);
@@ -349,17 +393,13 @@ void handleDeclareConstant(CXCursor cursor, ParsingContext* context) {
       return;
     cmpRef.parentId = cmp.id;
     Reference attr{name, cmp.id, location, cmpRef.id};
-    if(!context->activeGroup.empty()) {
-      cmpRef.group = context->activeGroup;
-    } else if(libId == context->activeInit.paramId) {
-      cmpRef.group = context->activeInit.group;
-    }
-    
+    cmpRef.group = grpId;    
     if(!cmpRef.group.empty()) {
       auto& grp = context->compounds[cmpRef.group];
-      grp.children.push_back(attr);
+      grp.children.emplace_back(std::move(attr));
+    } else {
+      cmp.children.emplace_back(std::move(attr));
     }
-    cmp.children.emplace_back(std::move(attr));
   } else {
     Member attr;
     attr.name = name;
@@ -367,6 +407,7 @@ void handleDeclareConstant(CXCursor cursor, ParsingContext* context) {
     attr.compound = cmp.id;
     attr.location = location;
     attr.description = comment;
+    attr.deprecated = context->deprecated;
     if(!context->activeMemberGroup.empty())
       attr.group = context->activeMemberGroup.toString();
     
@@ -375,7 +416,12 @@ void handleDeclareConstant(CXCursor cursor, ParsingContext* context) {
     if(!clang_Cursor_isNull(objRef))
       attr.cppRef = getFullyQualifiedName(objRef);
     
-    cmp.member.emplace_back(std::move(attr));
+    if(!grpId.empty()) {
+      auto& grp = context->compounds[grpId];
+      grp.member.emplace_back(std::move(attr));
+    } else {
+      cmp.member.emplace_back(std::move(attr));
+    }
   }
 }
 
@@ -483,6 +529,7 @@ CXChildVisitResult visitRoot(CXCursor cursor, CXCursor parent, CXClientData data
       context->comments.clear();
       context->activeGroup = StringId();
       context->groupBlock = false;
+      context->deprecated = false;
       context->activeMemberGroup = StringId();
       context->memberGroupBlock = false;
     } else if(name == "getClassName") {
@@ -541,11 +588,11 @@ void Parser::parseFile(const std::string& filename) {
   
   /*Compound* root = nullptr;
   for(auto& c : context->compounds) {
-    if(c.second.parentId.empty()) {
+    if(cmp.parentId.empty()) {
       if(!root)
-        root = &c.second;
+        root = &cmp;
       else
-        mergeCompounds(*root, c.second, context.get());
+        mergeCompounds(*root, cmp, context.get());
     }
   }*/
   
@@ -567,22 +614,30 @@ void Parser::writeJSON(const std::string& path) const {
   size_t maxLength = 80;
   int progress = 0;
   
+  // compute full names
   for(auto& c : context->compounds) {
-    if(c.second.isRef() || c.second.name.empty()) {
+    auto& cmp = c.second;
+    if(cmp.isRef() || cmp.name.empty())
+      continue;
+    
+    cmp.fullname = cmp.name;
+    auto pid = cmp.parentId;
+    while(!pid.empty()) {
+      auto& p = getCompound(pid, context.get());
+      if(!p.name.empty())
+        cmp.fullname = p.name + "." + cmp.fullname;
+      pid = p.parentId;
+    }
+  }
+  
+  for(auto& c : context->compounds) {
+    auto& cmp = c.second;
+    if(cmp.isRef() || cmp.name.empty()) {
       ++progress;
       continue;
     }
-    
-    std::string fullname = c.second.name;
-    auto pid = c.second.parentId;
-    while(!pid.empty()) {
-      auto& p = context->compounds[pid];
-      if(!p.name.empty())
-        fullname = p.name + "." + fullname;
-      pid = p.parentId;
-    }
     std::string kind = "unknown";
-    switch(c.second.kind) {
+    switch(cmp.kind) {
       case Compound::NAMESPACE:
         kind = "namespace"; break;
       case Compound::TYPE:
@@ -593,33 +648,35 @@ void Parser::writeJSON(const std::string& path) const {
     }
     
     std::stringstream json;
-    std::string filename = kind + "_" + replaceAll(fullname, ".", "_") + ".json";
+    std::string filename = kind + "_" + replaceAll(cmp.fullname, ".", "_") + ".json";
       
     int percent = static_cast<float>(progress)/context->compounds.size()*100;
     maxLength = std::max(maxLength, filename.size());
     std::cout << "\r[" << percent << "%] Writing " << filename << std::string(maxLength-filename.size(), ' ') << std::flush;
     
     json << "{" << std::endl;
-    json << "  \"id\" : \"" << c.second.id << "\"," << std::endl;
-    json << "  \"name\" : \"" << c.second.name << "\"," << std::endl;
-    json << "  \"fullname\" : \"" << fullname << "\"," << std::endl;
+    json << "  \"id\" : \"" << cmp.id << "\"," << std::endl;
+    json << "  \"name\" : \"" << cmp.name << "\"," << std::endl;
+    json << "  \"fullname\" : \"" << cmp.fullname << "\"," << std::endl;
     json << "  \"kind\" : \"" << kind << "\"," << std::endl;
-    json << "  \"location\" : \"" << c.second.location << "\"," << std::endl;
-    if(!c.second.parentId.empty() && !context->compounds[c.second.parentId].name.empty())
-      json << "  \"parent\" : \"" << c.second.parentId << "\"," << std::endl;
+    json << "  \"location\" : \"" << cmp.location << "\"," << std::endl;
+    if(!getCompound(cmp.parentId, context.get()).name.empty())
+      json << "  \"parent\" : \"" << cmp.parentId << "\"," << std::endl;
     else
       json << "  \"parent\" : \"\"," << std::endl;
-        
-    if(!c.second.group.empty() && !context->compounds[c.second.group].name.empty())
-      json << "  \"group\" : \"" << c.second.group << "\"," << std::endl;
+    
+    if(!getCompound(cmp.group, context.get()).name.empty())
+      json << "  \"group\" : \"" << cmp.group << "\"," << std::endl;
     else
       json << "  \"group\" : \"\"," << std::endl;      
-    json << "  \"description\" : \"" << escape(c.second.decription) << "\"," << std::endl;
+    json << "  \"description\" : \"" << escape(cmp.decription) << "\"," << std::endl;
     
     json << "  \"children\" : [" << std::endl;
-    for(auto& v : c.second.children) {
+    for(auto& v : cmp.children) {
+      std::string fullname = getCompound(v.compound, context.get()).fullname + "." + v.name;
       json << "    {" << std::endl;
       json << "      \"name\" : \"" << v.name << "\"," << std::endl;
+      json << "      \"fullname\" : \"" << fullname << "\"," << std::endl;
       json << "      \"ref\" : \"" << v.ref << "\"," << std::endl;
       json << "      \"location\" : \"" << v.location << "\"," << std::endl;
       json << "    }," << std::endl;
@@ -627,15 +684,18 @@ void Parser::writeJSON(const std::string& path) const {
     json << "  ]," << std::endl;
     
     json << "  \"member\" : [" << std::endl;
-    for(auto& v : c.second.member) {
+    for(auto& v : cmp.member) {
+      std::string fullname = getCompound(v.compound, context.get()).fullname + "." + v.name;
       json << "    {" << std::endl;
       json << "      \"name\" : \"" << v.name << "\"," << std::endl;
+      json << "      \"fullname\" : \"" << fullname << "\"," << std::endl;
       json << "      \"minParams\" : " << v.minParams << "," <<std::endl;
       json << "      \"maxParams\" : " << v.maxParams << "," << std::endl;
       json << "      \"location\" : \"" << v.location << "\"," << std::endl;
       json << "      \"description\" : \"" << escape(v.description) << "\"," << std::endl;
       json << "      \"cpp\" : \"" << v.cppRef << "\"," << std::endl;
       json << "      \"group\" : \"" << v.group << "\"," << std::endl;
+      json << "      \"deprecated\" : " << (v.deprecated ? "true" : "false") << "," << std::endl;
       json << "    }," << std::endl;
     }
     json << "  ]," << std::endl;

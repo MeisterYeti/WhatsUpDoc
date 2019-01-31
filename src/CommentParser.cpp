@@ -20,7 +20,8 @@ std::deque<CommentTokenPtr> parseComment(const std::string& comment, const Locat
   
   std::regex defGrpRegex = std::regex(R"((?:@|\\)defgroup\s+(\w+)\s+(.*))");
   std::regex grpRegex = std::regex(R"((?:@|\\)(addtogroup|ingroup)\s+(\w+))");
-  std::regex mgrpRegex = std::regex(R"((?:@|\\)(name)\s+(.*))");
+  std::regex mgrpRegex = std::regex(R"((?:@|\\)name\s+(.*))");
+  std::regex deprRegex = std::regex(R"((.*)(?:@|\\)deprecated\s*(.*))");
   std::regex blockRegex = std::regex(R"(@(\{|\}))");
   
   auto lines = split(comment, "\n");  
@@ -33,12 +34,16 @@ std::deque<CommentTokenPtr> parseComment(const std::string& comment, const Locat
     } else if(std::regex_match(line, match, grpRegex)) {
       result.emplace_back(new TInGroup(i,match[2]));
     } else if(std::regex_match(line, match, mgrpRegex)) {
-      result.emplace_back(new TMemberGroup(i,match[2]));
+      result.emplace_back(new TMemberGroup(i,match[1]));
     } else if(std::regex_match(line, match, blockRegex)) {
       if(match[1] == "{")
         result.emplace_back(new TBlockStart(i));
       else if(match[1] == "}")
         result.emplace_back(new TBlockEnd(i));
+    } else if(std::regex_match(line, match, deprRegex)) {
+      if(!trim(match[1]).empty())
+        result.emplace_back(new TTextLine(i, match[1]));
+      result.emplace_back(new TDeprecated(i, match[2]));
     } else {
       result.emplace_back(new TTextLine(i, line));
     }
