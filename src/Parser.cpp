@@ -320,6 +320,7 @@ void handleDeclareFunction(CXCursor cursor, ParsingContext* context) {
   StringId libId = toString(clang_getCursorUSR(libRef));
   fun.name = extractStringLiteral(clang_Cursor_getArgument(cursor, 1));
   fun.compound = cmp.id;
+  fun.kind = Member::FUNCTION;
   if(argc == 5) {
     fun.minParams = extractIntLiteral(clang_Cursor_getArgument(cursor, 2));
     fun.maxParams = extractIntLiteral(clang_Cursor_getArgument(cursor, 3));
