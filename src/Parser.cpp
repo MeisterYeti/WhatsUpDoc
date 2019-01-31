@@ -343,10 +343,9 @@ void handleDeclareFunction(CXCursor cursor, ParsingContext* context) {
   
   if(!grpId.empty()) {
     auto& grp = context->compounds[grpId];
-    grp.member.emplace_back(std::move(fun));
-  } else {
-    cmp.member.emplace_back(std::move(fun));
+    grp.member.emplace_back(fun);
   }
+  cmp.member.emplace_back(std::move(fun));
 }
 
 // -------------------------------------------------
@@ -393,13 +392,11 @@ void handleDeclareConstant(CXCursor cursor, ParsingContext* context) {
       return;
     cmpRef.parentId = cmp.id;
     Reference attr{name, cmp.id, location, cmpRef.id};
-    cmpRef.group = grpId;    
     if(!cmpRef.group.empty()) {
       auto& grp = context->compounds[cmpRef.group];
-      grp.children.emplace_back(std::move(attr));
-    } else {
-      cmp.children.emplace_back(std::move(attr));
+      grp.children.emplace_back(attr);
     }
+    cmp.children.emplace_back(std::move(attr));
   } else {
     Member attr;
     attr.name = name;
@@ -418,10 +415,9 @@ void handleDeclareConstant(CXCursor cursor, ParsingContext* context) {
     
     if(!grpId.empty()) {
       auto& grp = context->compounds[grpId];
-      grp.member.emplace_back(std::move(attr));
-    } else {
-      cmp.member.emplace_back(std::move(attr));
-    }
+      grp.member.emplace_back(attr);
+    } 
+    cmp.member.emplace_back(std::move(attr));
   }
 }
 
