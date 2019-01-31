@@ -113,12 +113,21 @@ int main(int argc, const char * argv[]) {
       std::cerr << "invalid input dir '" << path << "'." << std::endl;
       continue;
     }
-    auto files = IO::getFilesInDir(IO::condensePath(path), 4|1);
-    for(auto& f : files) {
-      if(f.compare(f.size()-4, 4, ".cpp") == 0) {
-        cppfiles.emplace_back(f);
-        maxLength = std::max(maxLength, f.size());
+    
+    std::deque<std::string> queue = {IO::condensePath(path)};
+    while(!queue.empty()) {
+      auto dir = queue.front();
+      queue.pop_front();
+      auto files = IO::getFilesInDir(dir, 1);
+      for(auto& f : files) {
+        if(f.compare(f.size()-4, 4, ".cpp") == 0) {
+          cppfiles.emplace_back(f);
+          maxLength = std::max(maxLength, f.size());
+        }
       }
+      auto dirs = IO::getFilesInDir(dir, 2);
+      for(auto& d : dirs)
+        queue.emplace_back(d);
     }
   }
   
