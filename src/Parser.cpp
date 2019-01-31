@@ -689,11 +689,20 @@ void Parser::writeJSON(const std::string& path) const {
     json << "  ]," << std::endl;
     
     json << "  \"member\" : [" << std::endl;
-    for(auto& v : cmp.member) {
+    for(auto& v : cmp.member) {      
+      std::string kind = "unknown";
+      switch(v.kind) {
+        case Member::CONST:
+          kind = "const"; break;
+        case Member::FUNCTION:
+          kind = "function"; break;
+        default: break;
+      }
       std::string fullname = getCompound(v.compound, context.get()).fullname + "." + v.name;
       json << "    {" << std::endl;
       json << "      \"name\" : \"" << v.name << "\"," << std::endl;
       json << "      \"fullname\" : \"" << fullname << "\"," << std::endl;
+      json << "      \"kind\" : \"" << kind << "\"," << std::endl;
       json << "      \"minParams\" : " << v.minParams << "," <<std::endl;
       json << "      \"maxParams\" : " << v.maxParams << "," << std::endl;
       json << "      \"location\" : \"" << v.location << "\"," << std::endl;
