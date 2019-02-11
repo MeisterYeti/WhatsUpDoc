@@ -3,9 +3,11 @@
 # The project folder
 PROJECT_FOLDER   = test/API
 # Which folders should be searched for .cpp files
-INPUT            = E_MinSG
+INPUT            = EScript E_MinSG
+# Only files matching one of the patterns are parsed (default=*.cpp)
+FILE_PATTERNS    = *.cpp
 # Additional include paths used by libclang
-INCLUDE          = Geometry GUI MinSG Rendering Sound Util EScript E_Geometry E_GUI E_Rendering E_Sound E_Util
+INCLUDE          = Geometry GUI MinSG Rendering Sound Util E_Geometry E_GUI E_Rendering E_Sound E_Util
 # The output directory
 OUTPUT_DIRECTORY = ../json
 # predefined macro definitions

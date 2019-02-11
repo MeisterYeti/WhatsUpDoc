@@ -26,6 +26,7 @@ int main(int argc, const char * argv[]) {
   std::vector<std::string> input;
   std::vector<std::string> defines;
   std::vector<std::string> flags;
+  std::vector<std::string> patterns;
   
   auto configLines = StringUtils::split(IO::loadFile(argv[1]).str(), "\n");
   int lineNr = 0;
@@ -68,12 +69,18 @@ int main(int argc, const char * argv[]) {
           defines.emplace_back(v);
       }
     } else if(key == "FLAGS") {
-    for(auto& v : StringUtils::split(value, " ")) {
-      v = StringUtils::trim(v);
-      if(!v.empty())
-        flags.emplace_back(v);
+      for(auto& v : StringUtils::split(value, " ")) {
+        v = StringUtils::trim(v);
+        if(!v.empty())
+          flags.emplace_back(v);
+      }
+    } else if(key == "FILE_PATTERNS") {
+      for(auto& v : StringUtils::split(value, " ")) {
+        v = StringUtils::trim(v);
+        if(!v.empty())
+          patterns.emplace_back(v);
+      }
     }
-  }
   }
   
   if(IO::getEntryType(projectFolder) != IO::TYPE_DIRECTORY) {
@@ -106,6 +113,9 @@ int main(int argc, const char * argv[]) {
   std::vector<std::string> cppfiles;
   size_t maxLength = 1;
   
+  if(patterns.empty())
+    patterns.emplace_back("*.cpp");
+  
   if(input.empty()) input.emplace_back("");
   for(auto& path : input) {
     path = IO::condensePath(projectFolder.empty() ? path : (projectFolder + "/" + path));
@@ -120,7 +130,10 @@ int main(int argc, const char * argv[]) {
       queue.pop_front();
       auto files = IO::getFilesInDir(dir, 1);
       for(auto& f : files) {
-        if(f.compare(f.size()-4, 4, ".cpp") == 0) {
+        bool valid = false;
+        for(auto& p : patterns)
+          valid |= matchWildcard(f, p);
+        if(valid) {
           cppfiles.emplace_back(f);
           maxLength = std::max(maxLength, f.size());
         }

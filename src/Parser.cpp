@@ -13,6 +13,20 @@
 #include <unordered_map>
 #include <deque>
 
+//#define DEBUG 2
+
+#if DEBUG >= 1
+#define DEBUG1(s) std::cout << s << std::endl;
+#else
+#define DEBUG1(s)
+#endif
+
+#if DEBUG >= 2
+#define DEBUG2(s) std::cout << s << std::endl;
+#else
+#define DEBUG2(s)
+#endif
+
 namespace WhatsUpDoc {
 using namespace EScript;
 
@@ -47,6 +61,7 @@ struct Compound {
   StringId refId;
   StringId parentId;
   StringId group;
+  StringId base;
   std::string name;
   std::string fullname;
   std::string decription;
@@ -84,7 +99,7 @@ struct ParsingContext {
 // -------------------------------------------------
 
 void mergeCompounds(Compound& c1, Compound& c2, ParsingContext* context) {
-  //std::cout << "  merge " << c1.id << " & " << c2.id << std::endl;
+  DEBUG1("  merge " << c1.id << " & " << c2.id)
   if(c1.id == c2.id) return;
   c2.refId = c1.id;
   
@@ -104,7 +119,10 @@ void mergeCompounds(Compound& c1, Compound& c2, ParsingContext* context) {
   c2.decription.clear();
     
   if(c1.parentId.empty())
-    c1.parentId = c2.parentId;
+    c1.parentId = c2.parentId;    
+    
+  if(c1.base.empty())
+    c1.base = c2.base;
     
   if(c1.location.file.empty())
     c1.location = c2.location;
@@ -168,26 +186,85 @@ Compound& getCompound(const StringId& id, ParsingContext* context) {
 
 Compound& resolveCompound(CXCursor cursor, ParsingContext* context) {
   static Compound nullCompound;
-  if(clang_Cursor_isNull(cursor) || (!hasType(cursor, "EScript::Namespace") && !hasType(cursor, "EScript::Type")))
+  if(clang_Cursor_isNull(cursor))
     return nullCompound;
+  cursor = findExposed(cursor);
+  auto kind = clang_getCursorKind(cursor);
+  
+  DEBUG2("  resolve " << cursor)
+  
+  if(!hasType(cursor, "EScript::Type") && !hasType(cursor, "EScript::Namespace"))
+    return nullCompound;
+  
+  DEBUG2("    cursor " << cursor)
+  
+  
+  if(kind == CXCursor_CallExpr) {
+    CXCursor ref = findTypeRef(cursor, "EScript::Type");
+    if(!clang_Cursor_isNull(ref)) {
+      cursor = ref;
+      kind = clang_getCursorKind(cursor);
+      DEBUG2("    ref " << cursor)
+    }
+  }
+  
+  if(kind == CXCursor_DeclRefExpr) {
+    CXCursor ref = clang_getCursorReferenced(cursor);
+    if(!clang_Cursor_isNull(ref)) {
+      cursor = ref;
+      kind = clang_getCursorKind(cursor);
+      DEBUG2("    ref " << cursor)
+    }
+  }
+  
+  if(kind == CXCursor_VarDecl) {
+    // search for a getTypeObject call or new Type
+    auto newType = findCursor(cursor, "", CXCursor_CXXNewExpr, "EScript::Type");
+    if(clang_Cursor_isNull(newType)) {
+      CXCursor ref = getCursorRef(cursor);
+      if(!clang_Cursor_isNull(ref)) {
+        cursor = ref;
+        kind = clang_getCursorKind(cursor);
+        DEBUG2("    ref " << cursor)
+      }
+    }
+  }
   StringId id = toString(clang_getCursorUSR(cursor));
-  if(id == context->activeInit.paramId) {
-    id = context->activeInit.id;
-  } else {
+  Location location = getCursorLocation(cursor);
+  if(id.empty()) {
     CXCursor ref = getCursorRef(cursor);
     if(!clang_Cursor_isNull(ref)) {
       id = toString(clang_getCursorUSR(ref));
+      location = getCursorLocation(ref);
     }
   }
+  if(id == context->activeInit.paramId)
+    id = context->activeInit.id;
+  if(id.empty())
+    return nullCompound;
+  DEBUG2("    id " << id)
+  
   auto& cmp = getCompound(id, context);
   if(cmp.isNull()) {
-    cmp.id = id;
-    cmp.location = getCursorLocation(cursor);
-    //std::cout << "  resolve " << cmp->id << std::endl;
+    cmp.id = id;    
+    DEBUG2("    new " << cmp.id)
+    cmp.location = location;
     if(hasType(cursor, "EScript::Namespace"))
       cmp.kind = Compound::NAMESPACE; 
-    else if(hasType(cursor, "EScript::Type"))
+    else if(hasType(cursor, "EScript::Type")) {
       cmp.kind = Compound::TYPE;
+    }
+  }
+  DEBUG2("    resolved " << cmp.id)
+  if(cmp.base.empty() && cmp.kind == Compound::TYPE) {
+    // try to find base type
+    auto newType = findCursor(cursor, "", CXCursor_CXXNewExpr, "EScript::Type", false);
+    if(!clang_Cursor_isNull(newType)) {
+      DEBUG2("  resolve base")
+      auto baseCmp = resolveCompound(newType, context);
+      if(!baseCmp.isNull())
+        cmp.base = baseCmp.id;
+    }
   }
   return cmp;
 }
@@ -304,18 +381,22 @@ void handleDeclareFunction(CXCursor cursor, ParsingContext* context) {
   Member fun;
   fun.location = location;
   fun.description = resolveComments(location, context);
+  
   if(argc != 3 && argc != 5) {
     std::cerr << std::endl << "invalid function declaration at " << location << "." << std::endl;
     return;
   }
-  CXCursor libRef = getCursorRef(clang_Cursor_getArgument(cursor, 0));
-  auto& cmp = resolveCompound(libRef, context);
+  
+  fun.name = extractStringLiteral(clang_Cursor_getArgument(cursor, 1));
+  DEBUG1("declare function " << fun.name << " @ " << location)
+  
+  CXCursor libArg = clang_Cursor_getArgument(cursor, 0);
+  DEBUG2("  resolve lib")
+  auto& cmp = resolveCompound(libArg, context);
   if(cmp.isNull()) {
     std::cerr << std::endl << "invalid function declaration at " << location << "." << std::endl;
     return;
   }
-  StringId libId = toString(clang_getCursorUSR(libRef));
-  fun.name = extractStringLiteral(clang_Cursor_getArgument(cursor, 1));
   fun.compound = cmp.id;
   fun.kind = Member::FUNCTION;
   if(argc == 5) {
@@ -328,11 +409,12 @@ void handleDeclareFunction(CXCursor cursor, ParsingContext* context) {
   
   // try to find corresponding c++ function
   CXCursor fnArg = getCursorRef(clang_Cursor_getArgument(cursor, argc == 5 ? 4 : 2));
-  CXCursor fnRef = findCall(fnArg, fun.name);
+  CXCursor fnRef = findRef(fnArg, fun.name);
   if(!clang_Cursor_isNull(fnRef))
     fun.cppRef = getFullyQualifiedName(fnRef);
   StringId grpId;
   
+  StringId libId = toString(clang_getCursorUSR(libArg));
   if(!context->activeGroup.empty()) {
     grpId = context->activeGroup;
   } else if(libId == context->activeInit.paramId) {
@@ -352,15 +434,9 @@ void handleDeclareConstant(CXCursor cursor, ParsingContext* context) {
   int argc = clang_Cursor_getNumArguments(cursor);
   auto location = getCursorLocation(cursor);
   if(argc != 3) return;
-  CXCursor libRef = getCursorRef(clang_Cursor_getArgument(cursor, 0));
   std::string comment = resolveComments(location, context);
-  auto& cmp = resolveCompound(libRef, context);
-  if(cmp.isNull()) {
-    std::cerr << std::endl << "invalid constant declaration at " << location << "." << std::endl;
-    return;
-  }
+  
   std::string name;
-  StringId libId = toString(clang_getCursorUSR(libRef));
   CXCursor nameRef = getCursorRef(clang_Cursor_getArgument(cursor, 1));
   if(!clang_Cursor_isNull(nameRef)) {
     StringId refId = toString(clang_getCursorUSR(nameRef));
@@ -374,17 +450,26 @@ void handleDeclareConstant(CXCursor cursor, ParsingContext* context) {
     std::cerr << std::endl << "could not resolve constant name at " << location << "." << std::endl;
     return;
   }
-    
+  DEBUG1("declare constant " << name << " @ " << location)
+  
+  CXCursor libArg = clang_Cursor_getArgument(cursor, 0);
+  DEBUG2("  resolve lib ")
+  auto& cmp = resolveCompound(libArg, context);
+  if(cmp.isNull()) {
+    std::cerr << std::endl << "invalid constant declaration at " << location << "." << std::endl;
+    return;
+  }
   StringId grpId;
+  StringId libId = toString(clang_getCursorUSR(getCursorRef(libArg)));
   if(!context->activeGroup.empty()) {
     grpId = context->activeGroup;
   } else if(libId == context->activeInit.paramId) {
     grpId = context->activeInit.group;
   }
   
-  CXCursor valueRef = getCursorRef(clang_Cursor_getArgument(cursor, 2));
-  if(!clang_Cursor_isNull(valueRef) && (hasType(valueRef, "EScript::Namespace") || hasType(valueRef, "EScript::Type"))) {
-    auto& cmpRef = resolveCompound(valueRef, context);
+  DEBUG2("  resolve value ")
+  auto& cmpRef = resolveCompound(clang_Cursor_getArgument(cursor, 2), context);
+  if(!cmpRef.isNull()) {
     cmpRef.name = name;
     if(cmpRef.id == cmp.id)
       return;
@@ -408,7 +493,7 @@ void handleDeclareConstant(CXCursor cursor, ParsingContext* context) {
       attr.group = context->activeMemberGroup.toString();
     
     // try to find corresponding c++ object
-    CXCursor objRef = findCall(clang_Cursor_getArgument(cursor, 2), name);
+    CXCursor objRef = findRef(clang_Cursor_getArgument(cursor, 2), name);
     if(!clang_Cursor_isNull(objRef))
       attr.cppRef = getFullyQualifiedName(objRef);
     
@@ -423,19 +508,22 @@ void handleDeclareConstant(CXCursor cursor, ParsingContext* context) {
 // -------------------------------------------------
 
 void handleInitCall(CXCursor cursor, ParsingContext* context) {
-  CXCursor cursorRef = clang_getCursorReferenced(cursor);
   int argc = clang_Cursor_getNumArguments(cursor);
   if(argc != 1) return;
   auto location = getCursorLocation(cursor);
-  CXCursor libRef = getCursorRef(clang_Cursor_getArgument(cursor, 0));
-  auto& cmp = resolveCompound(libRef, context);
-  auto& initCmp = resolveCompound(cursorRef, context);
-  if(cmp.isNull() || initCmp.isNull()) {
+  DEBUG1("init call @ " << location)
+  DEBUG2("  resolve lib ")
+  auto& cmp = resolveCompound(clang_Cursor_getArgument(cursor, 0), context);
+  DEBUG2("  resolve call ")
+  CXCursor callRef = clang_getCursorReferenced(cursor);
+  StringId callId = toString(clang_getCursorUSR(callRef));
+  auto& initCmp = getCompound(callId, context);
+  if(cmp.isNull() || callId.empty()) {
     std::cerr << std::endl << "invalid init call at " << location << "." << std::endl;
     return;
   }
   InitCall call;
-  call.id = initCmp.id;
+  call.id = callId;
   call.lib = cmp.id;
   resolveComments(location, context);
   if(!context->activeGroup.empty()) {
@@ -506,6 +594,7 @@ CXChildVisitResult visitRoot(CXCursor cursor, CXCursor parent, CXClientData data
       context->activeInit.id = toString(clang_getCursorUSR(cursor));
       context->activeInit.paramId = toString(clang_getCursorUSR(clang_Cursor_getArgument(cursor, 0)));
       context->activeInit.location = getCursorLocation(cursor);
+      DEBUG2("init ")
       resolveCompound(clang_Cursor_getArgument(cursor, 0), context);
       auto& call = context->initCalls[context->activeInit.id];
       if(!call.group.empty()) {
@@ -516,12 +605,12 @@ CXChildVisitResult visitRoot(CXCursor cursor, CXCursor parent, CXClientData data
         context->activeInit.group = StringId();
       }
       
-      //std::cout << "init " << id << std::endl;
+      DEBUG1("init " << context->activeInit.id);
       extractComments(cursor, context);
       clang_visitChildren(cursor, *visitInitFunction, context);
           
-      //for(auto& v : init.initCalls)
-      //  std::cout << "  init " << v.call << " (" << v.lib << ") @ " << std::endl;
+      //for(auto& v : context->initCalls)
+      //  std::cout << "  init " << v.first << " (" << v.second.lib << ") @ " << std::endl;
               
       context->comments.clear();
       context->activeGroup = StringId();
@@ -532,8 +621,9 @@ CXChildVisitResult visitRoot(CXCursor cursor, CXCursor parent, CXClientData data
     } else if(name == "getClassName") {
       auto clname = extractStringLiteral(cursor);
       StringId id = toString(clang_getCursorUSR(cursor));
-      if(!clname.empty())
+      if(!clname.empty()) {
         context->names[id] = clname;
+      }
     }
     return CXChildVisit_Continue;
   }
@@ -598,7 +688,7 @@ void Parser::parseFile(const std::string& filename) {
     return;
   }
   
-  //std::cout << "parsing " << filename << std::endl;
+  DEBUG1(std::endl << "parsing " << filename);
   CXCursor rootCursor = clang_getTranslationUnitCursor(context->tu);  
   clang_visitChildren(rootCursor, *visitRoot, context.get());  
   clang_disposeTranslationUnit(context->tu);
@@ -659,23 +749,20 @@ void Parser::writeJSON(const std::string& path) const {
     maxLength = std::max(maxLength, filename.size());
     std::cout << "\r[" << percent << "%] Writing " << filename << std::string(maxLength-filename.size(), ' ') << std::flush;
     
+    auto parent = getCompound(cmp.parentId, context.get());
+    auto group = getCompound(cmp.group, context.get());
+    auto base = getCompound(cmp.base, context.get());
+    
     json << "{" << std::endl;
     json << "  \"id\" : \"" << cmp.id << "\"," << std::endl;
     json << "  \"name\" : \"" << cmp.name << "\"," << std::endl;
     json << "  \"fullname\" : \"" << cmp.fullname << "\"," << std::endl;
     json << "  \"kind\" : \"" << kind << "\"," << std::endl;
     json << "  \"location\" : \"" << cmp.location << "\"," << std::endl;
-    if(!getCompound(cmp.parentId, context.get()).name.empty())
-      json << "  \"parent\" : \"" << cmp.parentId << "\"," << std::endl;
-    else
-      json << "  \"parent\" : \"\"," << std::endl;
-    
-    if(!getCompound(cmp.group, context.get()).name.empty())
-      json << "  \"group\" : \"" << cmp.group << "\"," << std::endl;
-    else
-      json << "  \"group\" : \"\"," << std::endl;      
-    json << "  \"description\" : \"" << escape(cmp.decription) << "\"," << std::endl;
-    
+    json << "  \"parent\" : \"" << (parent.name.empty() ? "" : cmp.parentId.toString()) << "\"," << std::endl;
+    json << "  \"group\" : \"" << (group.name.empty() ? "" : cmp.group.toString()) << "\"," << std::endl;
+    json << "  \"base\" : \"" << (base.name.empty() ? "" : cmp.base.toString()) << "\"," << std::endl;
+    json << "  \"description\" : \"" << escape(cmp.decription) << "\"," << std::endl;    
     json << "  \"children\" : [" << std::endl;
     for(auto& v : cmp.children) {
       std::string fullname = getCompound(v.compound, context.get()).fullname + "." + v.name;

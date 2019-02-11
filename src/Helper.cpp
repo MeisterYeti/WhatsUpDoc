@@ -2,6 +2,7 @@
 
 #include <EScript/Utils/StringUtils.h>
 
+#include <regex>
 #include <iostream>
 #include <sstream>
 
@@ -23,6 +24,17 @@ std::ostream& operator<<(std::ostream& stream, const EScript::StringId& str) {
 
 std::ostream& operator<<(std::ostream& stream, const Location& loc) {
   stream << loc.file << ":" << loc.line << ":" << loc.col;
+  return stream;
+}
+
+
+// -------------------------------------------------
+
+std::ostream& operator<<(std::ostream& stream, const CXCursor& cursor) {
+  CXCursorKind kind = clang_getCursorKind(cursor);
+  auto name = toString(clang_getCursorSpelling(cursor));
+  auto type = toString(clang_getTypeSpelling(clang_getCursorType(cursor)));
+  std::cout << clang_getCursorKindSpelling(kind) << ": " << name << " -> " << type;
   return stream;
 }
 
@@ -69,8 +81,6 @@ CXChildVisitResult getCursorRefVisitor(CXCursor cursor, CXCursor parent, CXClien
   
   //*reinterpret_cast<CXCursor*>(client_data) = clang_getNullCursor();
   switch (kind) {
-    case CXCursor_MemberRefExpr:
-      return CXChildVisit_Continue;
     case CXCursor_DeclRefExpr:
       *reinterpret_cast<CXCursor*>(client_data) = cursor;
       return CXChildVisit_Break;
@@ -171,23 +181,19 @@ std::string extractStringLiteral(CXCursor cursor) {
 // -------------------------------------------------
 
 CXChildVisitResult printASTVisitor(CXCursor cursor, CXCursor parent, CXClientData client_data) {
-  CXCursorKind kind = clang_getCursorKind(cursor);
-  auto name = toString(clang_getCursorSpelling(cursor));
   int indent = *reinterpret_cast<int*>(client_data);
   for(int i=0; i<indent; ++i)
     std::cout << "  ";
-  std::cout << "cursor " << name << " -> " << clang_getCursorKindSpelling(kind) << std::endl;
+  std::cout << "cursor " << cursor << std::endl;
   indent++;
   clang_visitChildren(cursor, *printASTVisitor, &indent);
   return CXChildVisit_Continue;
 }
 
 void printAST(CXCursor cursor, int indent) {
-  CXCursorKind kind = clang_getCursorKind(cursor);
-  auto name = toString(clang_getCursorSpelling(cursor));
   for(int i=0; i<indent; ++i)
     std::cout << "  ";
-  std::cout << "cursor " << name << " -> " << clang_getCursorKindSpelling(kind) << std::endl;
+  std::cout << "cursor " << cursor << std::endl;
   indent++;
   clang_visitChildren(cursor, *printASTVisitor, &indent);
 }
@@ -239,37 +245,84 @@ std::string toJSONFilename(const EScript::StringId& id) {
 
 // -------------------------------------------------
 
-struct FindCallResult {
+struct FindResult {
   CXCursor cursor;
+  int kind;
   std::string name;
+  std::string type;
 };
 
-CXChildVisitResult findCallVisitor(CXCursor cursor, CXCursor parent, CXClientData client_data) {
-  CXCursorKind kind = clang_getCursorKind(cursor);
+CXChildVisitResult findCursorVisitor(CXCursor cursor, CXCursor parent, CXClientData client_data) {
   auto name = toString(clang_getCursorSpelling(cursor));
-  switch(kind) {
-    case CXCursor_MemberRefExpr:
-    case CXCursor_DeclRefExpr: {
-      auto* result = reinterpret_cast<FindCallResult*>(client_data);
-      if(!name.empty() && name == result->name) {
-        result->cursor = cursor;
-        return CXChildVisit_Break;
-      }
-      break;
-    }
-    default: break;
+  CXCursorKind kind = clang_getCursorKind(cursor);
+  auto type = toString(clang_getTypeSpelling(clang_getCursorType(cursor)));
+  auto* result = reinterpret_cast<FindResult*>(client_data);  
+  if(
+    (result->kind == 0 || result->kind == kind) &&
+    (result->name.empty() || name == result->name) &&
+    (result->type.empty() || type.find(result->type) != std::string::npos)
+  ) {
+    result->cursor = cursor;
+    return CXChildVisit_Break;
   }
   return CXChildVisit_Recurse;
 }
 
-CXCursor findCall(CXCursor cursor, const std::string& name) {
-  FindCallResult result{clang_getNullCursor(), name};
-  if(findCallVisitor(cursor, clang_getNullCursor(), &result) != CXChildVisit_Break)
-    clang_visitChildren(cursor, *findCallVisitor, &result);
-  
-  if(!clang_Cursor_isNull(result.cursor)) {
-    return clang_getCursorReferenced(result.cursor);
+CXCursor findCursor(CXCursor cursor, const std::string& name, int kind, const std::string& type, bool includeSelf) {
+  FindResult result{clang_getNullCursor(), kind, name, type};
+  if(!includeSelf || findCursorVisitor(cursor, clang_getNullCursor(), &result) != CXChildVisit_Break)
+    clang_visitChildren(cursor, *findCursorVisitor, &result);
+  return result.cursor;
+}
+
+// -------------------------------------------------
+
+CXCursor findRef(CXCursor cursor, const std::string& name) {
+  CXCursor call = findCursor(cursor, name, CXCursor_MemberRefExpr);
+  if(clang_Cursor_isNull(call))
+    call = findCursor(cursor, name, CXCursor_DeclRefExpr);
+  if(!clang_Cursor_isNull(call)) {
+    return clang_getCursorReferenced(call);
   }
+  return call;
+}
+
+// -------------------------------------------------
+
+CXCursor findTypeRef(CXCursor cursor, const std::string& type) {
+  CXCursor typeCursor = findCursor(cursor, "", CXCursor_MemberRefExpr, type);
+  if(clang_Cursor_isNull(typeCursor))
+    typeCursor = findCursor(cursor, "", CXCursor_DeclRefExpr, type);
+  if(!clang_Cursor_isNull(typeCursor))
+    return clang_getCursorReferenced(typeCursor);
+  return typeCursor;
+}
+
+// -------------------------------------------------
+
+CXChildVisitResult findExposedVisitor(CXCursor cursor, CXCursor parent, CXClientData client_data) {
+  CXCursorKind kind = clang_getCursorKind(cursor);
+  switch(kind) {
+    case CXCursor_UnexposedAttr:
+    case CXCursor_UnexposedDecl:
+    case CXCursor_UnexposedExpr:
+    case CXCursor_UnexposedStmt:
+    case CXCursor_UnaryOperator: // also skip * &
+      return CXChildVisit_Recurse;
+    default: break;
+  }
+  // also skip RtValue
+  if(hasType(cursor, "EScript::RtValue"))
+    return CXChildVisit_Recurse;
+  auto* result = reinterpret_cast<FindResult*>(client_data);
+  result->cursor = cursor;
+  return CXChildVisit_Break;
+}
+
+CXCursor findExposed(CXCursor cursor) {
+  FindResult result{clang_getNullCursor(), 0, "", ""};
+  if(findExposedVisitor(cursor, clang_getNullCursor(), &result) != CXChildVisit_Break)
+    clang_visitChildren(cursor, *findExposedVisitor, &result);
   return result.cursor;
 }
 
@@ -285,6 +338,20 @@ std::string getFullyQualifiedName(CXCursor cursor) {
     name += toString(clang_getCursorSpelling(cursor));
   }
   return name;
+}
+
+// -------------------------------------------------
+
+bool matchWildcard(const std::string& input, const std::string& pattern) {
+  using namespace EScript::StringUtils;
+  std::string pat = pattern;
+  pat = replaceAll(pat,"\\","\\\\");
+  pat = replaceAll(pat,".","\\.");
+  pat = replaceAll(pat,"/","\\/");
+  pat = replaceAll(pat,"?",".");
+  pat = replaceAll(pat,"*",".*");
+  pat = "^" + pat + "$";
+  return std::regex_match(input, std::regex(pat));
 }
 
 // -------------------------------------------------
