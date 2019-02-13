@@ -13,7 +13,7 @@
 #include <unordered_map>
 #include <deque>
 
-//#define DEBUG 2
+//#define DEBUG 1
 
 #if DEBUG >= 1
 #define DEBUG1(s) std::cout << s << std::endl;
@@ -397,6 +397,8 @@ void handleDeclareFunction(CXCursor cursor, ParsingContext* context) {
     std::cerr << std::endl << "invalid function declaration at " << location << "." << std::endl;
     return;
   }
+  
+  DEBUG1("  compound " << cmp.id)
   fun.compound = cmp.id;
   fun.kind = Member::FUNCTION;
   if(argc == 5) {
@@ -414,7 +416,7 @@ void handleDeclareFunction(CXCursor cursor, ParsingContext* context) {
     fun.cppRef = getFullyQualifiedName(fnRef);
   StringId grpId;
   
-  StringId libId = toString(clang_getCursorUSR(libArg));
+  StringId libId = toString(clang_getCursorUSR(getCursorRef(libArg)));
   if(!context->activeGroup.empty()) {
     grpId = context->activeGroup;
   } else if(libId == context->activeInit.paramId) {
@@ -469,10 +471,12 @@ void handleDeclareConstant(CXCursor cursor, ParsingContext* context) {
   
   DEBUG2("  resolve value ")
   auto& cmpRef = resolveCompound(clang_Cursor_getArgument(cursor, 2), context);
+  DEBUG1("  compound " << cmp.id)
   if(!cmpRef.isNull()) {
     cmpRef.name = name;
     if(cmpRef.id == cmp.id)
       return;
+    DEBUG1("  ref " << cmpRef.id)
     cmpRef.parentId = cmp.id;
     cmpRef.group = grpId;
     Reference attr{name, cmp.id, location, cmpRef.id};
@@ -522,6 +526,8 @@ void handleInitCall(CXCursor cursor, ParsingContext* context) {
     std::cerr << std::endl << "invalid init call at " << location << "." << std::endl;
     return;
   }
+  if(initCmp.id.empty())
+    initCmp.id = callId;
   InitCall call;
   call.id = callId;
   call.lib = cmp.id;
