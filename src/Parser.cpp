@@ -375,9 +375,9 @@ std::string resolveComments(const Location& location, ParsingContext* context) {
         auto t = token->to<TCodeBlockStart>();
         std::string lang = t->lang;
         std::transform(lang.begin(), lang.end(), lang.begin(), ::tolower);
-        if(lang == "escript")
+        if(lang.compare("escript") == 0)
           lang = "js";
-        result += "\n```" + t->lang + "\n";
+        result += "\n```" + lang;
         break;
       }
       case TCodeBlockEnd::TYPE: {
