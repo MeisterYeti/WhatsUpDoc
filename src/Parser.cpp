@@ -12,8 +12,9 @@
 #include <sstream>
 #include <unordered_map>
 #include <deque>
+#include <algorithm>
 
-//#define DEBUG 1
+//#define DEBUG 2
 
 #if DEBUG >= 1
 #define DEBUG1(s) std::cout << s << std::endl;
@@ -116,6 +117,8 @@ void mergeCompounds(Compound& c1, Compound& c2, ParsingContext* context) {
   
   if(c1.decription.empty())
     c1.decription = c2.decription;
+  else
+    c1.decription.append("<br/>" + c2.decription);
   c2.decription.clear();
     
   if(c1.parentId.empty())
@@ -367,6 +370,27 @@ std::string resolveComments(const Location& location, ParsingContext* context) {
           result += "**Deprecated:** " + t->description;
         break;
       }
+      case TCodeBlockStart::TYPE: {
+        descriptionMode = false;
+        auto t = token->to<TCodeBlockStart>();
+        std::string lang = t->lang;
+        std::transform(lang.begin(), lang.end(), lang.begin(), ::tolower);
+        if(lang == "escript")
+          lang = "js";
+        result += "\n```" + t->lang + "\n";
+        break;
+      }
+      case TCodeBlockEnd::TYPE: {
+        descriptionMode = false;
+        result += "\n```\n";
+        break;
+      }
+      case TCodeLine::TYPE: {
+        descriptionMode = false;
+        auto t = token->to<TCodeLine>();
+        result += "\n" + t->text;
+        break;
+      }
     }
     context->comments.pop_front();
   }
@@ -479,6 +503,7 @@ void handleDeclareConstant(CXCursor cursor, ParsingContext* context) {
     DEBUG1("  ref " << cmpRef.id)
     cmpRef.parentId = cmp.id;
     cmpRef.group = grpId;
+    cmpRef.decription = comment;
     Reference attr{name, cmp.id, location, cmpRef.id};
     if(!cmpRef.group.empty()) {
       auto& grp = context->compounds[cmpRef.group];

@@ -31,9 +31,13 @@ std::deque<CommentTokenPtr> parseComment(const std::string& comment, const Locat
   std::regex mgrpRegex = std::regex(R"((?:@|\\)name\s+(.*))");
   std::regex deprRegex = std::regex(R"((.*)(?:@|\\)deprecated\s*(.*))");
   std::regex blockRegex = std::regex(R"(@(\{|\}))");
+  std::regex codeStartRegex = std::regex(R"((?:@|\\)code\s*(.*))");
+  std::regex codeLangRegex = std::regex(R"((?:\{?\.?)(\w+)((?:\}?)))");
+  std::regex codeEndRegex = std::regex(R"((?:@|\\)endcode\s*)");
   
   auto lines = split(comment, "\n");  
   int i=location.line;
+  bool codeLine = false;
   for(auto& line : lines) {
     line = std::regex_replace(line, lineRegex, "$1");
     std::smatch match;    
@@ -52,6 +56,15 @@ std::deque<CommentTokenPtr> parseComment(const std::string& comment, const Locat
       if(!trim(match[1]).empty())
         result.emplace_back(new TTextLine(i, escapeMarkdown(match[1])));
       result.emplace_back(new TDeprecated(i, match[2]));
+    } else if(std::regex_match(line, match, codeStartRegex)) {
+      std::string lang = std::regex_replace(match[1].str(), codeLangRegex, "$1");
+      result.emplace_back(new TCodeBlockStart(i, lang));
+      codeLine = true;
+    } else if(std::regex_match(line, match, codeEndRegex)) {
+      result.emplace_back(new TCodeBlockEnd(i));
+      codeLine = false;
+    } else if(codeLine) {
+      result.emplace_back(new TCodeLine(i, line));
     } else {
       result.emplace_back(new TTextLine(i, escapeMarkdown(line)));
     }

@@ -75,7 +75,27 @@ public:
   const std::string description;
   TDeprecated(uint32_t line, const std::string& descr) : Token(line, TYPE), description(descr) {}
 };
-  
+
+class TCodeBlockStart : public Token {
+public:
+  static const uint32_t TYPE = 9;
+  TCodeBlockStart(uint32_t line, const std::string& lang) : Token(line, TYPE), lang(lang) {}
+  const std::string lang;
+};
+
+class TCodeBlockEnd : public Token {
+public:
+  static const uint32_t TYPE = 10;
+  TCodeBlockEnd(uint32_t line) : Token(line, TYPE) {}
+};
+
+class TCodeLine : public Token {
+public:
+  static const uint32_t TYPE = 11;
+  TCodeLine(uint32_t line, const std::string& text) : Token(line, TYPE), text(text) {}
+  const std::string text;
+};
+
 } /* CommentTokens */
 
 typedef std::unique_ptr<CommentTokens::Token> CommentTokenPtr;
